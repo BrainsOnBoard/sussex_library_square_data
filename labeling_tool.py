@@ -113,7 +113,13 @@ def labeling():
         input_folder = input_folder[:-1]
     if output_folder.endswith('/'):
         output_folder = output_folder[:-1]
-    os.makedirs(output_folder, exist_ok=True)
+
+    try:
+        os.makedirs(output_folder)
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            raise
+
     data_frame = pandas.DataFrame(columns=['x [cm]', 'y [cm]', 'heading [degs]', 'filename'])
 
     filenames = glob(input_folder + '/*.jpg')
