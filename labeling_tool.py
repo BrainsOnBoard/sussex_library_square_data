@@ -3,6 +3,7 @@ from glob import glob
 from collections import namedtuple
 
 import cv2
+import errno
 import pandas
 import numpy as np
 
