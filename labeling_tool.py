@@ -51,8 +51,21 @@ thread_pause = True
 
 def click_handler(event, x0, y0, flags, param):
     global thread_pause
-    if event == cv2.EVENT_LBUTTONDOWN:
-        current_image, grid = param
+    current_image, grid = param
+    if event == cv2.EVENT_MBUTTONDOWN:
+        for x in range(grid_size[0]):
+            for y in range(grid_size[1]):
+                if cell_point_1(x, y)[0] < x0 < cell_point_2(x, y)[0] \
+                   and cell_point_1(x, y)[1] < y0 < cell_point_2(x, y)[1]:
+                    if grid[x, grid_size[1] - y - 1]:
+                        grid[x, grid_size[1] - y - 1] = None
+                        real_x = scale[0] * x
+                        real_y = scale[1] * (grid_size[1] - y - 1)
+                        filename = output_folder + '/' + str(real_x) + '_' + str(real_y) + '.jpg'
+                        os.remove(filename)
+                        show_grid(grid)
+                    return
+    elif event == cv2.EVENT_LBUTTONDOWN:
         for x in range(grid_size[0]):
             for y in range(grid_size[1]):
                 if cell_point_1(x, y)[0] < x0 < cell_point_2(x, y)[0] \
@@ -60,10 +73,15 @@ def click_handler(event, x0, y0, flags, param):
                     real_x = scale[0] * x
                     real_y = scale[1] * (grid_size[1] - y - 1)
                     filename = str(real_x) + '_' + str(real_y) + '.jpg'
-                    cv2.imwrite(output_folder + '/' + filename, current_image)
-                    grid[x, grid_size[1] - y - 1] = GridCell(real_x, real_y, heading, filename)
-                    break
-        thread_pause = False
+                    if grid[x, grid_size[1] - y - 1]:
+                        preview_image = cv2.imread(output_folder + '/' + filename)
+                        cv2.imshow('preview | labeling tool', preview_image)
+                        show_grid(grid)
+                    else:
+                        cv2.imwrite(output_folder + '/' + filename, current_image)
+                        grid[x, grid_size[1] - y - 1] = GridCell(real_x, real_y, heading, filename)
+                        thread_pause = False
+                    return
 
 
 def show_grid(grid):
