@@ -11,15 +11,17 @@ import numpy as np
 # True - to do labeling, False - to view labeled data(from output_folder)
 labeling_mode = True
 # folder with images to be labeled
-input_folder = 'unwrapped_image_grid/mid_day'
+input_folder = 'unwrapped_image_grid/evening'
 # folder to store labeled images and .csv file
-output_folder = 'labeled_images/mid_day'
+output_folder = 'labeled_images/evening'
 # grid size in slabs column-major
-grid_size = (13, 16)
+grid_size = (13, 15)
 # length of slab's sides (x_scale, y_scale) in cm
 scale = (40, 40)
 # heading of camera in degrees with respect to 0-angle;
 heading = -90
+# True - if you are sure that your dataset is perfect
+auto_mode = True
 # ------------------------------------------------------------------------ #
 
 # -------------------------- INTERNAL PARAMETERS ------------------------- #
@@ -129,22 +131,39 @@ def labeling():
     current_image = np.empty(image_shape, dtype=np.uint8)
 
     cv2.namedWindow('grid | labeling tool')
-    cv2.setMouseCallback('grid | labeling tool', click_handler, [current_image, grid])
+    if not auto_mode:
+        cv2.setMouseCallback('grid | labeling tool', click_handler, [current_image, grid])
 
+    filenames_iter = iter(filenames)
     try:
-        for filename in filenames:
-            current_image[:] = cv2.imread(filename)
-            cv2.imshow('current image | labeling tool', current_image)
-            show_grid(grid)
-            thread_pause = True
-            while thread_pause:
-                cv2.waitKey(33)
+        if auto_mode:
+            for y in range(grid_size[1]):
+                for x in range(grid_size[0]):
+                    filename = next(filenames_iter)
+                    print(filename)
+                    current_image[:] = cv2.imread(filename)
+                    real_x = scale[0] * x
+                    real_y = scale[1] * y
+                    filename = str(real_x) + '_' + str(real_y) + '.jpg'
+                    cv2.imwrite(output_folder + '/' + filename, current_image)
+                    grid[x, grid_size[1] - y - 1] = GridCell(real_x, real_y, heading, filename)
+                    show_grid(grid)
+                    cv2.waitKey(33)
+        else:
+            for filename in filenames:
+                print(filename)
+                current_image[:] = cv2.imread(filename)
+                cv2.imshow('current image | labeling tool', current_image)
+                show_grid(grid)
+                thread_pause = True
+                while thread_pause:
+                    cv2.waitKey(1)
+
     except KeyboardInterrupt:
         pass
 
-    np.flip(grid, 0)
     for i in range(grid.shape[0]):
-        for j in range(grid.shape[1]):
+        for j in range(grid.shape[1] - 1, -1, -1):
             if grid[i, j]:
                 data_frame = data_frame.append({'x [cm]': grid[i, j].x,
                                                 'y [cm]': grid[i, j].y,
