@@ -16,6 +16,8 @@ input_folder = 'unwrapped_image_grid/evening'
 output_folder = 'labeled_images/evening'
 # grid size in slabs column-major
 grid_size = (13, 15)
+# number of slabs for one cell (num_x, num_y)
+step = (3, 3)
 # length of slab's sides (x_scale, y_scale) in cm
 scale = (40, 40)
 # heading of camera in degrees with respect to 0-angle;
@@ -62,8 +64,8 @@ def click_handler(event, x0, y0, flags, param):
                    and cell_point_1(x, y)[1] < y0 < cell_point_2(x, y)[1]:
                     if grid[x, grid_size[1] - y - 1]:
                         grid[x, grid_size[1] - y - 1] = None
-                        real_x = scale[0] * x
-                        real_y = scale[1] * (grid_size[1] - y - 1)
+                        real_x = step[0] * scale[0] * x
+                        real_y = step[1] * scale[1] * (grid_size[1] - y - 1)
                         filename = output_folder + '/' + str(real_x) + '_' + str(real_y) + '.jpg'
                         os.remove(filename)
                         show_grid(grid)
@@ -73,8 +75,8 @@ def click_handler(event, x0, y0, flags, param):
             for y in range(grid_size[1]):
                 if cell_point_1(x, y)[0] < x0 < cell_point_2(x, y)[0] \
                    and cell_point_1(x, y)[1] < y0 < cell_point_2(x, y)[1]:
-                    real_x = scale[0] * x
-                    real_y = scale[1] * (grid_size[1] - y - 1)
+                    real_x = step[0] * scale[0] * x
+                    real_y = step[1] * scale[1] * (grid_size[1] - y - 1)
                     filename = str(real_x) + '_' + str(real_y) + '.jpg'
                     if grid[x, grid_size[1] - y - 1]:
                         preview_image = cv2.imread(output_folder + '/' + filename)
@@ -142,8 +144,8 @@ def labeling():
                     filename = next(filenames_iter)
                     print(filename)
                     current_image[:] = cv2.imread(filename)
-                    real_x = scale[0] * x
-                    real_y = scale[1] * y
+                    real_x = step[0] * scale[0] * x
+                    real_y = step[1] * scale[1] * y
                     filename = str(real_x) + '_' + str(real_y) + '.jpg'
                     cv2.imwrite(output_folder + '/' + filename, current_image)
                     grid[x, grid_size[1] - y - 1] = GridCell(real_x, real_y, heading, filename)
