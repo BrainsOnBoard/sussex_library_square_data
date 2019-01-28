@@ -1,0 +1,10 @@
+%YAML:1.0
+---
+my_object:
+   pointsInGrid: 10
+   winSize: [ 3, 3 ]
+   maxLevel: 5
+   termCriteria_maxCount: 20
+   termCriteria_epsilon: 2.9999999999999999e-01
+   winSizeNCC: [ 50, 50 ]
+   maxMedianLengthOfDisplacementDifference: 10.
