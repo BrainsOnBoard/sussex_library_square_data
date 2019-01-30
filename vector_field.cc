@@ -9,11 +9,12 @@
 using namespace BoBRobotics;
 using namespace units::literals;
 using namespace units::length;
+using namespace units::angle;
 using namespace units::math;
 
 int main()
 {
-    const cv::Size imSize(240, 50);
+    const cv::Size imSize(120, 25);
 
     // Default algorithm: find best-matching snapshot, use abs diff
     Navigation::PerfectMemoryRotater<> pm(imSize);
@@ -56,6 +57,22 @@ int main()
     cv::Mat routePointsMat(routePoints, true);
     cv::polylines(gridImage, routePointsMat, false, CV_RGB(255, 0, 0));
     
+    /*degree_t lastHeading = 0_deg;
+    for(const auto &r : route) {
+        const degree_t heading = r.heading;
+        
+        if(heading != lastHeading) {
+            const centimeter_t x = r.position[0];
+            const centimeter_t y = r.position[1];
+            
+            const centimeter_t xEnd = x + (120_cm * cos(heading));
+            const centimeter_t yEnd = y + (120_cm * sin(heading));
+            cv::arrowedLine(gridImage, cv::Point(x.value(), y.value()), cv::Point(xEnd.value(), yEnd.value()),
+                            CV_RGB(0, 0, 255));
+            lastHeading = heading;
+        }
+    }*/
+    
     // Loop through grid entries
     std::vector<std::vector<float>> allDifferences;
     for(const auto &g : grid) {
@@ -66,18 +83,18 @@ int main()
         cv::Mat snapshot = g.loadGreyscale();
         cv::resize(snapshot, snapshot, imSize);
         
-        units::angle::degree_t bestHeading;
+        degree_t bestHeadingRelative;
         size_t bestSnapshotIndex;
         float lowestDifference;
-        std::tie(bestHeading, bestSnapshotIndex, lowestDifference, allDifferences) = pm.getHeading(snapshot);
+        std::tie(bestHeadingRelative, bestSnapshotIndex, lowestDifference, allDifferences) = pm.getHeading(snapshot);
         
-        std::cout << "(" << x << ", " << y << ") : " << bestHeading << ", " << lowestDifference << ", " << bestSnapshotIndex << std::endl;
+        const degree_t bestSnapshotHeading = route[bestSnapshotIndex].heading;
+        std::cout << "(" << x << ", " << y << ") : " << bestHeadingRelative << ", " << bestSnapshotHeading << ", " << lowestDifference << ", " << bestSnapshotIndex << std::endl;
         
-        const centimeter_t xEnd = x + (120_cm * (1.0 - lowestDifference) * cos(bestHeading));
-        const centimeter_t yEnd = y + (120_cm * (1.0 - lowestDifference) * sin(bestHeading));
+        const centimeter_t xEnd = x + (60_cm * (1.0 - lowestDifference) * cos(bestSnapshotHeading - bestHeadingRelative));
+        const centimeter_t yEnd = y + (60_cm * (1.0 - lowestDifference) * sin(bestSnapshotHeading - bestHeadingRelative));
         cv::arrowedLine(gridImage, cv::Point(x.value(), y.value()), cv::Point(xEnd.value(), yEnd.value()),
                         CV_RGB(0, 0, 255));
-        
         cv::imwrite("grid_image.png", gridImage);
     }
     
