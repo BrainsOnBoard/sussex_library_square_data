@@ -1,7 +1,9 @@
 import cv2
 import numpy as np
 from glob import glob
+from os import path
 
+# Simple tool for drawing on windows, taken from OpenCV python samples common.py
 class Sketcher:
     def __init__(self, windowname, dests, colors_func):
         self.prev_pt = None
@@ -24,7 +26,7 @@ class Sketcher:
 
         if self.prev_pt and flags & cv2.EVENT_FLAG_LBUTTON:
             for dst, color in zip(self.dests, self.colors_func()):
-                cv2.line(dst, self.prev_pt, pt, color, 5)
+                cv2.line(dst, self.prev_pt, pt, color, 3)
             self.dirty = True
             self.prev_pt = pt
             self.show()
@@ -36,10 +38,13 @@ def get_colours():
     return list(map(int, colours[cur_marker])), cur_marker
 
 marker_mask_image = None
-for f in glob("unwrapped_image_grid/mid_day/*.jpg"):
+for f in sorted(glob("unwrapped_image_grid/mid_day/*.jpg")):
+    print(f)
+    
     # Read input image
     input_image = cv2.imread(f)
     input_draw_image = input_image.copy()
+    watershed_mask = None
     
     # Create matching mask if required
     if marker_mask_image is None:
@@ -59,13 +64,13 @@ for f in glob("unwrapped_image_grid/mid_day/*.jpg"):
     
     while True:
         if sketch.dirty:
-            m = marker_mask_image.copy()
-            cv2.watershed(input_image, m)
-            overlay = colours[np.maximum(m, 0)]
+            watershed_mask = marker_mask_image.copy()
+            cv2.watershed(input_image, watershed_mask)
+            overlay = colours[np.maximum(watershed_mask, 0)]
             vis = cv2.addWeighted(input_image, 0.5, overlay, 0.5, 0.0, dtype=cv2.CV_8UC3)
             cv2.imshow("Watershed", vis)
             sketch.dirty = False
-            
+        
         # Process events
         key = cv2.waitKey(1) & 0xFF
         
@@ -77,4 +82,9 @@ for f in glob("unwrapped_image_grid/mid_day/*.jpg"):
         elif key >= ord("1") and key <= ord("7"):
             cur_marker = key - ord("0")
         elif key == ord("n"):
+            f_title, f_ext = path.splitext(f)
+            
+            min_mask = np.amin(watershed_mask)
+            max_mask = np.amax(watershed_mask)
+            cv2.imwrite(f_title + "_mask.png", (watershed_mask.astype(np.uint8) - min_mask) * 255 / (max_mask - min_mask))
             break
