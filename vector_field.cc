@@ -57,22 +57,6 @@ int main()
     cv::Mat routePointsMat(routePoints, true);
     cv::polylines(gridImage, routePointsMat, false, CV_RGB(255, 0, 0));
     
-    /*degree_t lastHeading = 0_deg;
-    for(const auto &r : route) {
-        const degree_t heading = r.heading;
-        
-        if(heading != lastHeading) {
-            const centimeter_t x = r.position[0];
-            const centimeter_t y = r.position[1];
-            
-            const centimeter_t xEnd = x + (120_cm * cos(heading));
-            const centimeter_t yEnd = y + (120_cm * sin(heading));
-            cv::arrowedLine(gridImage, cv::Point(x.value(), y.value()), cv::Point(xEnd.value(), yEnd.value()),
-                            CV_RGB(0, 0, 255));
-            lastHeading = heading;
-        }
-    }*/
-    
     // Loop through grid entries
     std::vector<std::vector<float>> allDifferences;
     for(const auto &g : grid) {
@@ -82,19 +66,30 @@ int main()
         // Load snapshot and resize
         cv::Mat snapshot = g.loadGreyscale();
         cv::resize(snapshot, snapshot, imSize);
-        
-        degree_t bestHeadingRelative;
+
+        // Get best heading using perfect memory
+        degree_t bestHeading;
         size_t bestSnapshotIndex;
         float lowestDifference;
-        std::tie(bestHeadingRelative, bestSnapshotIndex, lowestDifference, allDifferences) = pm.getHeading(snapshot);
-        
-        const degree_t bestSnapshotHeading = route[bestSnapshotIndex].heading;
-        std::cout << "(" << x << ", " << y << ") : " << bestHeadingRelative << ", " << bestSnapshotHeading << ", " << lowestDifference << ", " << bestSnapshotIndex << std::endl;
-        
-        const centimeter_t xEnd = x + (60_cm * (1.0 - lowestDifference) * cos(bestSnapshotHeading - bestHeadingRelative));
-        const centimeter_t yEnd = y + (60_cm * (1.0 - lowestDifference) * sin(bestSnapshotHeading - bestHeadingRelative));
+        std::tie(bestHeading, bestSnapshotIndex, lowestDifference, allDifferences) = pm.getHeading(snapshot);
+
+        std::cout << "(" << x << ", " << y << ") : " << bestHeading << ", " << lowestDifference << ", " << bestSnapshotIndex << std::endl;
+
+        // Draw arrow showing vector field
+        const centimeter_t xEnd = x + (60_cm * (1.0 - lowestDifference) * sin(-bestHeading));
+        const centimeter_t yEnd = y + (60_cm * (1.0 - lowestDifference) * cos(-bestHeading));
         cv::arrowedLine(gridImage, cv::Point(x.value(), y.value()), cv::Point(xEnd.value(), yEnd.value()),
                         CV_RGB(0, 0, 255));
+
+        // Get posiiton of best snapshot
+        const centimeter_t bestSnapshotX = route[bestSnapshotIndex].position[0];
+        const centimeter_t bestSnapshotY = route[bestSnapshotIndex].position[1];
+
+        // If snapshot is less than 3m away i.e. algorithm hasn't entirely failed draw line from snapshot to route
+        if(sqrt(((bestSnapshotX - x) * (bestSnapshotX - x)) + ((bestSnapshotY - y) * (bestSnapshotY - y))) < 3_m) {
+            cv::line(gridImage, cv::Point(x.value(), y.value()), cv::Point(bestSnapshotX.value(), bestSnapshotY.value()),
+                     CV_RGB(0, 255, 0));
+        }
         cv::imwrite("grid_image.png", gridImage);
     }
     
