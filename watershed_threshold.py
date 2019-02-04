@@ -1,7 +1,8 @@
 import cv2
+import sys
 import numpy as np
 from glob import glob
-from os import path
+from os import path, mkdir
 
 # Simple tool for drawing on windows, taken from OpenCV python samples common.py
 class Sketcher:
@@ -37,12 +38,33 @@ colours = np.int32(list(np.ndindex(2, 2, 2))) * 255
 def get_colours():
     return list(map(int, colours[cur_marker])), cur_marker
 
+
+if len(sys.argv) < 2:
+    print("Directory of route or image grid containing unwrapped images expected")
+    sys.exit(2)
+
+# Build path to unwrapped files, exit if it doesn't exist
+unwrapped_dir = path.join(sys.argv[1], "unwrapped")
+if not path.exists(unwrapped_dir):
+    print("%s does not exist" % unwrapped_dir)
+    sys.exit(1)
+
+# Build path to mask files, create if it doesn't exist
+mask_dir = path.join(sys.argv[1], "mask")
+if not path.exists(mask_dir):
+    mkdir(mask_dir)
+
+# Get list of unwrapped images
+unwrapped_paths = sorted(glob(path.join(unwrapped_dir,"unwrapped_*.jpg")))
+
+# Loop through unwrapped images
 marker_mask_image = None
-for f in sorted(glob("unwrapped_image_grid/mid_day/*.jpg")):
-    print(f)
+i = 0;
+while i < len(unwrapped_paths):
+    print(unwrapped_paths[i])
     
     # Read input image
-    input_image = cv2.imread(f)
+    input_image = cv2.imread(unwrapped_paths[i])
     input_draw_image = input_image.copy()
     watershed_mask = None
     
@@ -81,10 +103,23 @@ for f in sorted(glob("unwrapped_image_grid/mid_day/*.jpg")):
             sketch.show()
         elif key >= ord("1") and key <= ord("7"):
             cur_marker = key - ord("0")
+        elif key == ord("p") and i > 0:
+            i-=1
+            break
         elif key == ord("n"):
-            f_title, f_ext = path.splitext(f)
+            # Split mask path into directory and filename
+            unwrapped_filename = path.split(unwrapped_paths[i])[1]
+            
+            # Extract title from filename
+            raw_title = path.splitext(unwrapped_filename)[0]
+
+            # Build path to mask image
+            mask_path = path.join(mask_dir, raw_title + "_mask.png")
             
             min_mask = np.amin(watershed_mask)
             max_mask = np.amax(watershed_mask)
-            cv2.imwrite(f_title + "_mask.png", (watershed_mask.astype(np.uint8) - min_mask) * 255 / (max_mask - min_mask))
+
+            cv2.imwrite(mask_path, (watershed_mask.astype(np.uint8) - min_mask) * 255 / (max_mask - min_mask))
+            
+            i+=1
             break
