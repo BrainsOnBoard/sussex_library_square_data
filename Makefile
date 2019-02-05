@@ -1,3 +1,4 @@
+WITH_EIGEN:=1
 include $(BOB_ROBOTICS_PATH)/make_common/bob_robotics.mk
 
 .PHONY: all clean
