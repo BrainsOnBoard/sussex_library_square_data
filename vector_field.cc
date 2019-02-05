@@ -14,31 +14,106 @@ using namespace units::length;
 using namespace units::angle;
 using namespace units::math;
 
+//------------------------------------------------------------------------
+// Anonymous namespace
+//------------------------------------------------------------------------
 namespace
 {
-std::vector<cv::Point2i> decimateRoute(const Navigation::ImageDatabase &database)
+void processRoute(const Navigation::ImageDatabase &database,
+                  cv::Mat &renderMatFull, cv::Mat &renderMatDecimated,
+                  std::vector<cv::Point2f> &decimatedPoints)
 {
+
     std::vector<float> routePointComponents;
     routePointComponents.reserve(database.size() * 2);
-    for(const auto &r : database) {
-        routePointComponents.emplace_back(centimeter_t(r.position[0]).value());
-        routePointComponents.emplace_back(centimeter_t(r.position[1]).value());
+
+    {
+        // Reserve temporary vector to hold route points, snapped to integer pixels
+        std::vector<cv::Point2i> routePointPixels;
+        routePointPixels.reserve(database.size());
+
+        // Loop through route
+        for(const auto &r : database) {
+            // Get position of point in cm
+            const centimeter_t x = r.position[0];
+            const centimeter_t y = r.position[1];
+
+            // Add x and y components of position to vector
+            routePointComponents.emplace_back(x.value());
+            routePointComponents.emplace_back(y.value());
+
+            // Add x and y pixel values
+            routePointPixels.emplace_back((int)std::round(x.value()), (int)std::round(y.value()));
+        }
+
+        // Build render matrix from route point pixels
+        renderMatFull = cv::Mat(routePointPixels, true);
     }
 
+    // Decimate route points
     std::vector<float> decimatedRoutePointComponents;
     psimpl::simplify_douglas_peucker<2>(routePointComponents.cbegin(), routePointComponents.cend(),
                                         15.0,
                                         std::back_inserter(decimatedRoutePointComponents));
 
-    std::vector<cv::Point2i> decimatedRoutePoints;
-    decimatedRoutePoints.reserve(decimatedRoutePointComponents.size() / 2);
-    for(size_t i = 0; i < decimatedRoutePointComponents.size(); i += 2) {
-        decimatedRoutePoints.emplace_back((int)std::round(decimatedRoutePointComponents[i]),
-                                          (int)std::round(decimatedRoutePointComponents[i + 1]));
+    decimatedPoints.reserve(decimatedRoutePointComponents.size() / 2);
+
+    {
+        // Reserve temporary vector to hold decimated route points, snapped to integer pixels
+        std::vector<cv::Point2i> decimatedPixels;
+        decimatedPixels.reserve(decimatedRoutePointComponents.size() / 2);
+
+        for(size_t i = 0; i < decimatedRoutePointComponents.size(); i += 2) {
+            const float x = decimatedRoutePointComponents[i];
+            const float y = decimatedRoutePointComponents[i + 1];
+
+            decimatedPixels.emplace_back((int)std::round(x), (int)std::round(y));
+
+            decimatedPoints.emplace_back(x, y);
+        }
+
+        // Build render matrix from decimated pixels
+        renderMatDecimated = cv::Mat(decimatedPixels, true);
     }
-    return decimatedRoutePoints;
 }
+
+// Get distance to route from point
+std::pair<float, cv::Point2f> getDistanceToRoute(const cv::Point2f &point,
+                                                 const std::vector<cv::Point2f> &routePoints)
+{
+    // Loop through points
+    float shortestDistanceSquared = std::numeric_limits<float>::max();
+    cv::Point2f nearestPoint;
+    for(size_t i = 0; i < (routePoints.size() - 1); i++) {
+        // Get vector pointing along segment and it's squared
+        const cv::Point2f segmentVector = routePoints[i + 1] - routePoints[i];
+        const float segmentLengthSquared = segmentVector.dot(segmentVector);
+
+        // Get vector from start of segment to point
+        const cv::Point2f segmentStartToPoint = point - routePoints[i];
+
+        // Take dot product of two vectors and normalise, clamping at 0 and 1
+        const float t = std::max(0.0f, std::min(1.0f, segmentStartToPoint.dot(segmentVector) / segmentLengthSquared));
+
+        // Find nearest point on the segment
+        const cv::Point2f nearestPointOnSegment = routePoints[i] + (t * segmentVector);
+
+        // Get the vector from here to our point and hence the squared distance
+        const cv::Point2f shortestSegmentToPoint = point - nearestPointOnSegment;
+        const float distanceSquared = shortestSegmentToPoint.dot(shortestSegmentToPoint);
+
+        // If this is shorter than current best, update current
+        if(distanceSquared < shortestDistanceSquared) {
+            shortestDistanceSquared = distanceSquared;
+            nearestPoint = nearestPointOnSegment;
+        }
+    }
+
+    // Return shortest distance and position of nearest point
+    return std::make_pair(std::sqrt(shortestDistanceSquared), nearestPoint);
 }
+}   // Anonymous namespace
+
 int main()
 {
     const cv::Size imSize(120, 25);
@@ -49,10 +124,13 @@ int main()
     // Train perfect memory, resizing images to fit
     Navigation::ImageDatabase route("routes/route5/skymask");
     pm.trainRoute(route, true);
-    std::cout << "Trained on " << pm.getNumSnapshots() << " snapshots" << std::endl;
-    
-    const auto decimatedRoutePoints = decimateRoute(route);
-    cv::Mat decimatedRoutePointMat(decimatedRoutePoints, true);
+    std::cout << "Trained odecimatedPointsn " << pm.getNumSnapshots() << " snapshots" << std::endl;
+
+    // Process routes to get render images
+    std::vector<cv::Point2f> decimatedRoutePoints;
+    cv::Mat routePointsMat;
+    cv::Mat decimatedRoutePointMat;
+    processRoute(route, routePointsMat, decimatedRoutePointMat, decimatedRoutePoints);
 
     // Load grid
     Navigation::ImageDatabase grid("image_grids/mid_day/skymask");
@@ -73,18 +151,7 @@ int main()
                       (int)std::round(size[0] * seperationMM[0] * 0.1), 
                       CV_8UC3, cv::Scalar::all(0));
     
-    // **TODO** could probably work directly into correctly formatted cv::Mat
-    std::vector<cv::Point2i> routePoints;
-    routePoints.reserve(route.size());
-    for(const auto &r : route) {
-        const centimeter_t x = r.position[0];
-        const centimeter_t y = r.position[1];
-        
-        routePoints.emplace_back((int)std::round(x.value()), (int)std::round(y.value()));
-    }
-    
     // Draw route onto image
-    cv::Mat routePointsMat(routePoints, true);
     cv::polylines(gridImage, routePointsMat, false, CV_RGB(128, 128, 128));
     cv::polylines(gridImage, decimatedRoutePointMat, false, CV_RGB(255, 255, 255));
     bool showBadMatches = false;
@@ -94,9 +161,12 @@ int main()
     for(const auto &g : grid) {
         const centimeter_t x = g.position[0];
         const centimeter_t y = g.position[1];
-        
+
+        // Get distance from grid point to route
+        const auto distanceToRoute = getDistanceToRoute(cv::Point2f(x.value(), y.value()), decimatedRoutePoints);
+
         // If snapshot is within R.O.I.
-        if(x > 240_cm && x < 1200_cm && y > 0_cm && y < 1560_cm) {
+        if(distanceToRoute.first < 400.0f) {
             // Load snapshot and resize
             cv::Mat snapshot = g.loadGreyscale();
             cv::resize(snapshot, snapshot, imSize);
