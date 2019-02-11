@@ -2,6 +2,7 @@
 #include <opencv2/opencv.hpp>
 
 // BoB robotics 3rd party includes
+#include "third_party/CLI11.hpp"
 #include "third_party/path.h"
 
 // BoB robotics includes
@@ -20,9 +21,6 @@ using namespace units::angle;
 using namespace units::math;
 using namespace units::solid_angle;
 
-//#define INFOMAX
-#define CONSTRAIN_HEADINGS
-
 //------------------------------------------------------------------------
 // Anonymous namespace
 //------------------------------------------------------------------------
@@ -33,7 +31,7 @@ degree_t shortestAngleBetween(degree_t x, degree_t y)
     return atan2(sin(x - y), cos(x - y));
 }
 //------------------------------------------------------------------------
-void processRoute(const Navigation::ImageDatabase &database,
+void processRoute(const Navigation::ImageDatabase &database, double decimate,
                   cv::Mat &renderMatFull, cv::Mat &renderMatDecimated,
                   std::vector<cv::Point2f> &decimatedPoints)
 {
@@ -67,7 +65,7 @@ void processRoute(const Navigation::ImageDatabase &database,
     // Decimate route points
     std::vector<float> decimatedRoutePointComponents;
     psimpl::simplify_douglas_peucker<2>(routePointComponents.cbegin(), routePointComponents.cend(),
-                                        15.0,
+                                        decimate,
                                         std::back_inserter(decimatedRoutePointComponents));
 
     decimatedPoints.reserve(decimatedRoutePointComponents.size() / 2);
@@ -132,157 +130,383 @@ std::tuple<centimeter_t, cv::Point2f, size_t, degree_t> getNearestPointOnRoute(c
     // Return shortest distance and position of nearest point
     return std::make_tuple(centimeter_t(std::sqrt(shortestDistanceSquared)), nearestPoint, nearestSegment, nearestSegmentHeading);
 }
+
 //------------------------------------------------------------------------
-template<typename FloatType>
-void writeWeights(const BoBRobotics::Navigation::InfoMax<FloatType> &infomax, const filesystem::path &path)
-{
-    // Write weights to disk
-    const auto weights = infomax.getWeights();
-    std::ofstream netFile(path.str(), std::ios::binary);
-    const int size[2] { (int) weights.rows(), (int) weights.cols() };
-    netFile.write(reinterpret_cast<const char *>(size), sizeof(size));
-    netFile.write(reinterpret_cast<const char *>(weights.data()), weights.size() * sizeof(FloatType));
-}
+// MemoryBase
 //------------------------------------------------------------------------
-template<typename FloatType>
-auto readData(const filesystem::path &weightPath)
+class MemoryBase
 {
-    // Open file
-    std::ifstream is(weightPath.str(), std::ios::binary);
-    if (!is.good()) {
-        throw std::runtime_error("Could not open " + weightPath.str());
+public:
+    MemoryBase()
+    :   m_BestHeading(0_deg), m_LowestDifference(std::numeric_limits<size_t>::max()), m_VectorLength(0)
+    {
     }
 
-    // The matrix size is encoded as 2 x int32_t
-    int32_t size[2];
-    is.read(reinterpret_cast<char *>(&size), sizeof(size));
+    //------------------------------------------------------------------------
+    // Declared virtuals
+    //------------------------------------------------------------------------
+    virtual void test(const cv::Mat &snapshot, degree_t snapshotHeading, degree_t nearestRouteHeading) = 0;
 
-    // Create data array and fill it
-    Eigen::Matrix<FloatType, Eigen::Dynamic, Eigen::Dynamic> data(size[0], size[1]);
-    is.read(reinterpret_cast<char *>(data.data()), sizeof(FloatType) * data.size());
-
-    return std::move(data);
-}
-//------------------------------------------------------------------------
-template<typename FloatType>
-Navigation::InfoMaxRotater<> createInfoMax(const cv::Size &imSize, const filesystem::path &weightPath, const Navigation::ImageDatabase &route)
-{
-     if(weightPath.exists()) {
-        std::cout << "Loading weights from " << weightPath << std::endl;
-        const auto weights = readData<FloatType>(weightPath);
-
-        Navigation::InfoMaxRotater<> infomax(imSize, weights);
-        return std::move(infomax);
+    virtual void writeCSVHeader(std::ostream &os)
+    {
+        os << "Grid X [cm], Grid Y [cm], Best heading [degrees], Angular error [degrees], Lowest difference";
     }
-    else {
-        Navigation::InfoMaxRotater<> infomax(imSize);
-        infomax.trainRoute(route, true);
-        writeWeights(infomax, weightPath.str());
+
+    virtual void writeCSVLine(std::ostream &os, centimeter_t snapshotX, centimeter_t snapshotY, degree_t angularError)
+    {
+        os << snapshotX << ", " << snapshotY << ", " << getBestHeading() << ", " << angularError << ", " << getLowestDifference();
+    }
+
+    virtual void render(cv::Mat &, centimeter_t, centimeter_t)
+    {
+
+    }
+
+    //------------------------------------------------------------------------
+    // Public API
+    //------------------------------------------------------------------------
+    degree_t getBestHeading() const{ return m_BestHeading; }
+    float getLowestDifference() const{ return m_LowestDifference; }
+    float getVectorLength() const{ return m_VectorLength; }
+
+protected:
+    //------------------------------------------------------------------------
+    // Protected API
+    //------------------------------------------------------------------------
+    void setBestHeading(degree_t bestHeading){ m_BestHeading = bestHeading; }
+    void setLowestDifference(float lowestDifference){ m_LowestDifference = lowestDifference; }
+    void setVectorLength(float vectorLength){ m_VectorLength = vectorLength; }
+
+private:
+    //------------------------------------------------------------------------
+    // Members
+    //------------------------------------------------------------------------
+    degree_t m_BestHeading;
+    float m_LowestDifference;
+    float m_VectorLength;
+};
+
+//------------------------------------------------------------------------
+// PerfectMemory
+//------------------------------------------------------------------------
+class PerfectMemory : public MemoryBase
+{
+public:
+    PerfectMemory(const cv::Size &imSize, const Navigation::ImageDatabase &route,
+                  bool renderGoodMatches, bool renderBadMatches)
+    :   m_PM(imSize), m_Route(route), m_BestSnapshotIndex(std::numeric_limits<size_t>::max()),
+        m_RenderGoodMatches(renderGoodMatches), m_RenderBadMatches(renderBadMatches)
+    {
+        m_PM.trainRoute(route, true);
         std::cout << "Trained on " << route.size() << " snapshots" << std::endl;
-        return std::move(infomax);
-    }
-}
-//------------------------------------------------------------------------
-std::tuple<degree_t, size_t, float> getConstrainedHeading(const std::vector<std::vector<float>> &allDifferences,
-                                                          degree_t gridHeading, degree_t routeHeading, degree_t fov,
-                                                          const cv::Size &imSize)
-{
-    // **NOTE** this currently uses a super-naive approach because good solution is non-trivial as
-    // columns that represent the rotations are not necessarily contiguous - there is a dis-continuity in the middle
-
-    /*// Get angles on either side of route within which snapshots will be matched
-    const degree_t routeA = routeHeading - fov;
-    const degree_t routeB = routeHeading + fov;
-
-    // Get shortest angle between each of these route angles and grid
-    const degree_t gridRotationA = shortestAngleBetween(gridHeading, routeA);
-    const degree_t gridRotationB = shortestAngleBetween(gridHeading, routeB);
-
-    // Convert these into pixel rotations
-    int columnA = (int)std::round((turn_t(gridRotationA) * (double)imSize.width).value());
-    int columnB = (int)std::round((turn_t(gridRotationB) * (double)imSize.width).value());
-
-    // If either pixel rotation is negative (
-    if(columnA < 0) {
-        columnA += imSize.width;
-    }
-    if(columnB < 0) {
-        columnB += imSize.width;
     }
 
-    // Get min and max
-    const int minColumn = std::min(columnA, columnB);
-    const int maxColumn = std::max(columnA, columnB);
-    assert(minColumn >= 0);
-    assert(maxColumn >= 0);
-    assert(minColumn < imSize.width);
-    assert(maxColumn < imSize.width);*/
+    //------------------------------------------------------------------------
+    // MemoryBase virtuals
+    //------------------------------------------------------------------------
+    virtual void test(const cv::Mat &snapshot, degree_t snapshotHeading, degree_t) override
+    {
+        // Get heading directly from Perfect Memory
+        degree_t bestHeading;
+        float lowestDifference;
+        std::tie(bestHeading, m_BestSnapshotIndex, lowestDifference, std::ignore) = getPM().getHeading(snapshot);
 
-    // Loop through snapshots
-    float lowestDifference = std::numeric_limits<float>::max();
-    size_t bestSnapshot = std::numeric_limits<size_t>::max();
-    degree_t bestRotation = 0_deg;
-    for(size_t i = 0; i < allDifferences.size(); i++) {
-        const auto &snapshotDifferences = allDifferences[i];
+        // Set best heading and vector length
+        setBestHeading(snapshotHeading + bestHeading);
+        setLowestDifference(lowestDifference);
 
-        // Loop through acceptable range of columns
-        for(int c = 0; c < imSize.width; c++) {
-            // If this snapshot is a better match than current best
-            if(snapshotDifferences[c] < lowestDifference) {
-                // Convert column into pixel rotation
-                int pixelRotation = c;
-                if(pixelRotation > (imSize.width / 2)) {
-                    pixelRotation -= imSize.width;
-                }
+        // Calculate vector length
+        setVectorLength(1.0f - lowestDifference);
+    }
 
-                // Convert this into angle
-                const degree_t rotation = turn_t((double)pixelRotation / (double)imSize.width);
+    virtual void writeCSVHeader(std::ostream &os)
+    {
+        // Superclass
+        MemoryBase::writeCSVHeader(os);
 
-                // If the distance between this angle from grid and route angle is within FOV
-                if(fabs(shortestAngleBetween(rotation + gridHeading, routeHeading)) < fov) {
-                    // Update best
-                    bestSnapshot = i;
-                    bestRotation = rotation;
-                    lowestDifference = snapshotDifferences[c];
-                }
-            }
+        os << ", Best snapshot index";
+    }
+
+    virtual void writeCSVLine(std::ostream &os, centimeter_t snapshotX, centimeter_t snapshotY, degree_t angularError)
+    {
+        // Superclass
+        MemoryBase::writeCSVLine(os, snapshotX, snapshotY, angularError);
+
+        os << ", " << getBestSnapshotIndex();
+    }
+
+    virtual void render(cv::Mat &image, centimeter_t snapshotX, centimeter_t snapshotY)
+    {
+        // Get position of best snapshot
+        const centimeter_t bestRouteX = m_Route[m_BestSnapshotIndex].position[0];
+        const centimeter_t bestRouteY = m_Route[m_BestSnapshotIndex].position[1];
+
+        // If snapshot is less than 3m away i.e. algorithm hasn't entirely failed draw line from snapshot to route
+        const bool goodMatch = (sqrt(((bestRouteX - snapshotX) * (bestRouteX - snapshotX)) + ((bestRouteY - snapshotY) * (bestRouteY - snapshotY))) < 3_m);
+        if(goodMatch && m_RenderGoodMatches) {
+            cv::line(image, cv::Point(snapshotX.value(), snapshotY.value()), cv::Point(bestRouteX.value(), bestRouteY.value()),
+                     CV_RGB(0, 255, 0));
+        }
+        else if(!goodMatch && m_RenderBadMatches) {
+            cv::line(image, cv::Point(snapshotX.value(), snapshotY.value()), cv::Point(bestRouteX.value(), bestRouteY.value()),
+                     CV_RGB(255, 0, 0));
         }
     }
 
-    // Check valid snapshot actually exists
-    assert(bestSnapshot != std::numeric_limits<size_t>::max());
+    //------------------------------------------------------------------------
+    // Public API
+    //------------------------------------------------------------------------
+    size_t getBestSnapshotIndex() const{ return m_BestSnapshotIndex; }
 
-    // Scale difference to match code in ridf_processors.h:57
-    return std::make_tuple(bestRotation, bestSnapshot, lowestDifference / 255.0f);
-}
+protected:
+    //------------------------------------------------------------------------
+    // Protected API
+    //------------------------------------------------------------------------
+    const Navigation::PerfectMemoryRotater<> &getPM() const{ return m_PM; }
+
+    void setBestSnapshotIndex(size_t bestSnapshotIndex){ m_BestSnapshotIndex = bestSnapshotIndex; }
+
+private:
+    //------------------------------------------------------------------------
+    // Members
+    //------------------------------------------------------------------------
+    Navigation::PerfectMemoryRotater<> m_PM;
+    const Navigation::ImageDatabase &m_Route;
+    size_t m_BestSnapshotIndex;
+    const bool m_RenderGoodMatches;
+    const bool m_RenderBadMatches;
+};
+
+//------------------------------------------------------------------------
+// PerfectMemoryConstrained
+//------------------------------------------------------------------------
+class PerfectMemoryConstrained : public PerfectMemory
+{
+public:
+    PerfectMemoryConstrained(const cv::Size &imSize, const Navigation::ImageDatabase &route, degree_t fov,
+                             bool renderGoodMatches, bool renderBadMatches)
+    :   PerfectMemory(imSize, route, renderGoodMatches, renderBadMatches), m_FOV(fov), m_ImageWidth(imSize.width)
+    {
+    }
+
+
+    virtual void test(const cv::Mat &snapshot, degree_t snapshotHeading, degree_t nearestRouteHeading) override
+    {
+        // Get 'matrix' of differences from perfect memory
+        const auto &allDifferences = getPM().getImageDifferences(snapshot);
+
+        // Loop through snapshots
+        // **NOTE** this currently uses a super-naive approach as more efficient solution is non-trivial because
+        // columns that represent the rotations are not necessarily contiguous - there is a dis-continuity in the middle
+        float lowestDifference = std::numeric_limits<float>::max();
+        setBestSnapshotIndex(std::numeric_limits<size_t>::max());
+        setBestHeading(0_deg);
+        for(size_t i = 0; i < allDifferences.size(); i++) {
+            const auto &snapshotDifferences = allDifferences[i];
+
+            // Loop through acceptable range of columns
+            for(int c = 0; c < m_ImageWidth; c++) {
+                // If this snapshot is a better match than current best
+                if(snapshotDifferences[c] < lowestDifference) {
+                    // Convert column into pixel rotation
+                    int pixelRotation = c;
+                    if(pixelRotation > (m_ImageWidth / 2)) {
+                        pixelRotation -= m_ImageWidth;
+                    }
+
+                    // Convert this into angle
+                    const degree_t heading = snapshotHeading + turn_t((double)pixelRotation / (double)m_ImageWidth);
+
+                    // If the distance between this angle from grid and route angle is within FOV, update best
+                    if(fabs(shortestAngleBetween(heading, nearestRouteHeading)) < m_FOV) {
+                        setBestSnapshotIndex(i);
+                        setBestHeading(heading);
+                        lowestDifference = snapshotDifferences[c];
+                    }
+                }
+            }
+        }
+
+        // Check valid snapshot actually exists
+        assert(getBestSnapshotIndex() != std::numeric_limits<size_t>::max());
+
+        // Scale difference to match code in ridf_processors.h:57
+        setLowestDifference(lowestDifference / 255.0f);
+
+        // Calculate vector length
+        setVectorLength(1.0f - lowestDifference);
+    }
+
+private:
+    //------------------------------------------------------------------------
+    // Members
+    //------------------------------------------------------------------------
+    const degree_t m_FOV;
+    const int m_ImageWidth;
+};
+
+//------------------------------------------------------------------------
+// InfoMax
+//------------------------------------------------------------------------
+template<typename FloatType>
+class InfoMax : public MemoryBase
+{
+    using InfoMaxType = Navigation::InfoMax<FloatType>;
+    using InfoMaxWeightMatrixType = Eigen::Matrix<FloatType, Eigen::Dynamic, Eigen::Dynamic>;
+
+public:
+    InfoMax(const cv::Size &imSize, const Navigation::ImageDatabase &route)
+        : m_InfoMax(createInfoMax(imSize, route))
+    {
+    }
+
+    virtual void test(const cv::Mat &snapshot, degree_t snapshotHeading, degree_t) override
+    {
+        // Get heading directly from InfoMax
+        degree_t bestHeading;
+        float lowestDifference;
+        std::tie(bestHeading, lowestDifference, std::ignore) = m_InfoMax.getHeading(snapshot);
+
+        // Set best heading and vector length
+        setBestHeading(snapshotHeading + bestHeading);
+        setLowestDifference(lowestDifference);
+
+        // **TODO** calculate vector length
+        setVectorLength(1.0f);
+    }
+private:
+    //------------------------------------------------------------------------
+    // Static API
+    //------------------------------------------------------------------------
+    // **TODO** move into BoB robotics
+    void writeWeights(const InfoMaxWeightMatrixType &weights, const filesystem::path &weightPath)
+    {
+        // Write weights to disk
+        std::ofstream netFile(weightPath.str(), std::ios::binary);
+        const int size[2] { (int) weights.rows(), (int) weights.cols() };
+        netFile.write(reinterpret_cast<const char *>(size), sizeof(size));
+        netFile.write(reinterpret_cast<const char *>(weights.data()), weights.size() * sizeof(FloatType));
+    }
+
+    // **TODO** move into BoB robotics
+    InfoMaxWeightMatrixType readWeights(const filesystem::path &weightPath)
+    {
+        // Open file
+        std::ifstream is(weightPath.str(), std::ios::binary);
+        if (!is.good()) {
+            throw std::runtime_error("Could not open " + weightPath.str());
+        }
+
+        // The matrix size is encoded as 2 x int32_t
+        int32_t size[2];
+        is.read(reinterpret_cast<char *>(&size), sizeof(size));
+
+        // Create data array and fill it
+        Eigen::Matrix<FloatType, Eigen::Dynamic, Eigen::Dynamic> data(size[0], size[1]);
+        is.read(reinterpret_cast<char *>(data.data()), sizeof(FloatType) * data.size());
+
+        return std::move(data);
+    }
+
+    static Navigation::InfoMaxRotater<FloatType> createInfoMax(const cv::Size &imSize, const Navigation::ImageDatabase &route)
+    {
+        // Create path to weights from directory containing route
+        const filesystem::path weightPath = filesystem::path(route.getName()) / "infomax.bin";
+
+        if(weightPath.exists()) {
+            std::cout << "Loading weights from " << weightPath << std::endl;
+            Navigation::InfoMaxRotater<> infomax(imSize, readWeights(weightPath));
+            return std::move(infomax);
+        }
+        else {
+            Navigation::InfoMaxRotater<> infomax(imSize);
+            infomax.trainRoute(route, true);
+            writeWeights(infomax.getWeights(), weightPath.str());
+            std::cout << "Trained on " << route.size() << " snapshots" << std::endl;
+            return std::move(infomax);
+        }
+    }
+
+    //------------------------------------------------------------------------
+    // Members
+    //------------------------------------------------------------------------
+    Navigation::InfoMaxRotater<FloatType> m_InfoMax;
+};
 }   // Anonymous namespace
 
-int main()
+int main(int argc, char **argv)
 {
-    const filesystem::path routePath("routes/route5/skymask");
+    // Default command line arguments
+    cv::Size imSize(120, 25);
+    std::string routeName = "route5";
+    std::string variantName = "skymask";
+    std::string imageGridName = "mid_day";
+    std::string outputImageName = "grid_image.png";
+    std::string outputCSVName = "";
+    std::string memoryType = "PerfectMemory";
+    bool renderGoodMatches = true;
+    bool renderBadMatches = false;
+    bool renderRoute = true;
+    bool renderDecimatedRoute = true;
+    double fovDegrees = 90.0;
+    double decimateDistance = 15.0;
 
-    const cv::Size imSize(120, 25);
+    // Configure command line parser
+    CLI::App app{"BoB robotics 'vector field' renderer"};
+    app.add_option("--route", routeName, "Name of route", true);
+    app.add_option("--grid", imageGridName, "Name of image grid", true);
+    app.add_option("--variant", variantName, "Variant of route and grid to use", true);
+    app.add_option("--width", imSize.width, "Width of unwrapped image", true);
+    app.add_option("--height", imSize.height, "Height of unwrapped image", true);
+    app.add_option("--output-image", outputImageName, "Name of output image to generate", true);
+    app.add_option("--output-csv", outputCSVName, "Name of output CSV to generate", true);
+    app.add_option("--decimate-distance", decimateDistance, "Threshold (in cm) for decimating route points", true);
+    app.add_option("--fov", fovDegrees,
+                   "For 'constrained' memories, what angle (in degrees) on either side of route should snapshots be matched in", true);
+    app.add_set("--memory-type", memoryType, {"PerfectMemory", "PerfectMemoryConstrained", "InfoMax"},
+                "Type of memory to use for navigation", true);
+    /*app.add_flag("--render-good-matches,--no-render-good-matches{false}", renderGoodMatches,
+                 "Should lines be rendered between grid points and 'good' matches");
+    app.add_flag("--render-bad-matches,!--no-render-bad-matches", renderBadMatches,
+                 "Should lines be rendered between grid points and 'bad' matches");
+    app.add_flag("--render-route,!--no-render-route", renderRoute,
+                 "Should unprocessed route be rendered");
+    app.add_flag("--render-decimated-route,!--no-render-decimated-route", renderDecimatedRoute,
+                 "Should decimated route be rendered");*/
+
+
+    // Parse command line arguments
+    CLI11_PARSE(app, argc, argv);
 
     // Create database from route
+    const filesystem::path routePath = filesystem::path("routes") / routeName / variantName;
+    std::cout << routePath << std::endl;
     Navigation::ImageDatabase route(routePath);
 
-    // Default algorithm: find best-matching snapshot, use abs diff
-#ifdef INFOMAX
-    const auto pm = createInfoMax<float>(imSize, routePath / "infomax.bin", route);
-#else
-    Navigation::PerfectMemoryRotater<> pm(imSize);
-    pm.trainRoute(route, true);
-    std::cout << "Trained on " << route.size() << " snapshots" << std::endl;
-#endif
+    std::unique_ptr<MemoryBase> memory;
+    if(memoryType == "PerfectMemory") {
+        memory.reset(new PerfectMemory(imSize, route,
+                                       renderGoodMatches, renderBadMatches));
+    }
+    else if(memoryType == "PerfectMemoryConstrained") {
+        memory.reset(new PerfectMemoryConstrained(imSize, route, degree_t(fovDegrees),
+                                                  renderGoodMatches, renderBadMatches));
+    }
+    /*else if(memoryType == "InfoMax") {
+        memory.reset(new InfoMax<float>(imSize, route));
+    }*/
+    else {
+        throw std::runtime_error("Memory type '" + memoryType + "' not supported");
+    }
 
     // Process routes to get render images
     std::vector<cv::Point2f> decimatedRoutePoints;
     cv::Mat routePointsMat;
     cv::Mat decimatedRoutePointMat;
-    processRoute(route, routePointsMat, decimatedRoutePointMat, decimatedRoutePoints);
+    processRoute(route, decimateDistance, routePointsMat, decimatedRoutePointMat, decimatedRoutePoints);
 
     // Load grid
-    Navigation::ImageDatabase grid("image_grids/mid_day/skymask");
+    Navigation::ImageDatabase grid = filesystem::path("image_grids") /  imageGridName / variantName;
     assert(grid.isGrid());
     assert(grid.hasMetadata());
 
@@ -295,25 +519,32 @@ int main()
 
     std::cout << size[0] << "x" << size[1] << " grid with " << seperationMM[0] << "x" << seperationMM[1] << "mm squares" << std::endl;
 
+    // If a filename is specified, open CSV file other write to std::cout
+    std::ofstream outputCSVFile;
+    if(!outputCSVName.empty()) {
+        outputCSVFile.open(outputCSVName);
+    }
+    std::ostream &outputCSV = outputCSVName.empty() ? std::cout : outputCSVFile;
+
+    // Write header to CSV file
+    memory->writeCSVHeader(outputCSV);
+    outputCSV << std::endl;
+
     // Make a grid image with one pixel per cm
     cv::Mat gridImage((int)std::round(size[1] * seperationMM[1] * 0.1), 
                       (int)std::round(size[0] * seperationMM[0] * 0.1), 
                       CV_8UC3, cv::Scalar::all(0));
 
     // Draw route onto image
-    cv::polylines(gridImage, routePointsMat, false, CV_RGB(64, 64, 64));
-    cv::polylines(gridImage, decimatedRoutePointMat, false, CV_RGB(255, 255, 255));
+    if(renderRoute) {
+        cv::polylines(gridImage, routePointsMat, false, CV_RGB(64, 64, 64));
+    }
+
+    if(renderDecimatedRoute) {
+        cv::polylines(gridImage, decimatedRoutePointMat, false, CV_RGB(255, 255, 255));
+    }
 
     // Loop through grid entries
-#ifdef INFOMAX
-    std::vector<float> allDifferences;
-#else
-    bool showBadMatches = false;
-#ifndef CONSTRAIN_HEADINGS
-    std::vector<std::vector<float>> allDifferences;
-#endif
-#endif
-
     size_t numGridPointsWithinROI = 0;
     degree_squared_t sumSquareError = 0_sq_deg;
     for(const auto &g : grid) {
@@ -332,68 +563,30 @@ int main()
             cv::Mat snapshot = g.loadGreyscale();
             cv::resize(snapshot, snapshot, imSize);
 
-            // Get best heading using perfect memory
-            degree_t bestHeading;
-            float lowestDifference;
-#ifdef INFOMAX
-            std::tie(bestHeading, lowestDifference, allDifferences) = pm.getHeading(snapshot);
-            const double vectorLength = 1.0f;
-#else
-            size_t bestSnapshotIndex;
-#ifdef CONSTRAIN_HEADINGS
-            // Get 'matrix' of differences from perfect memory
-            const auto &allDifferences = pm.getImageDifferences(snapshot);
-
-
-            // From these find the best snapshot within 90 degrees of route at nearest point
-            std::tie(bestHeading, bestSnapshotIndex, lowestDifference) = getConstrainedHeading(allDifferences,
-                                                                                               g.heading, std::get<3>(nearestPoint), 90_deg,
-                                                                                               imSize);
-
-            // Check resultant heading is actually within 90 degrees of route at nearest point
-            assert(fabs(degree_t(atan2(sin(std::get<3>(nearestPoint) - bestHeading), cos(std::get<3>(nearestPoint) - bestHeading)))));
-#else
-            std::tie(bestHeading, bestSnapshotIndex, lowestDifference, allDifferences) = pm.getHeading(snapshot);
-#endif
-            const double vectorLength = (1.0 - lowestDifference);
-#endif
-
-            // Add grid image heading to best heading as that is what it's relative to
-            bestHeading += g.heading;
+            // Test snapshot using memory
+            memory->test(snapshot, g.heading, std::get<3>(nearestPoint));
 
             // Get magnitude of shortest angle between route and headig
-            const degree_t angularError = shortestAngleBetween(bestHeading, std::get<3>(nearestPoint));
+            const degree_t angularError = shortestAngleBetween(memory->getBestHeading(), std::get<3>(nearestPoint));
 
             // Add to sum square error
             sumSquareError += (angularError * angularError);
 
             // Draw arrow showing vector field
-            const centimeter_t xEnd = x + (60_cm * vectorLength * cos(bestHeading));
-            const centimeter_t yEnd = y + (60_cm * vectorLength * sin(bestHeading));
+            const centimeter_t xEnd = x + (60_cm * memory->getVectorLength() * cos(memory->getBestHeading()));
+            const centimeter_t yEnd = y + (60_cm * memory->getVectorLength() * sin(memory->getBestHeading()));
             cv::arrowedLine(gridImage, cv::Point(x.value(), y.value()), cv::Point(xEnd.value(), yEnd.value()),
                             CV_RGB(0, 0, 255));
 
-            std::cout << "(" << x << ", " << y << ") : " << bestHeading << "(" << angularError << "), " << lowestDifference;
-#ifndef INFOMAX
-            std::cout << ", " << bestSnapshotIndex;
+            // Write CSV line
+            memory->writeCSVLine(outputCSV, x, y, angularError);
+            outputCSV << std::endl;
 
-            // Get position of best snapshot
-            const centimeter_t bestSnapshotX = route[bestSnapshotIndex].position[0];
-            const centimeter_t bestSnapshotY = route[bestSnapshotIndex].position[1];
+            // Perform any memory-specific additional rendering
+            memory->render(gridImage, x, y);
 
-            //cv::line(gridImage, cv::Point(x.value(), y.value()), std::get<1>(nearestPoint), CV_RGB(0, 255, 0));
-
-            // If snapshot is less than 3m away i.e. algorithm hasn't entirely failed draw line from snapshot to route
-            const bool goodMatch = (sqrt(((bestSnapshotX - x) * (bestSnapshotX - x)) + ((bestSnapshotY - y) * (bestSnapshotY - y))) < 3_m);
-            if(goodMatch || showBadMatches) {
-                cv::line(gridImage, cv::Point(x.value(), y.value()), cv::Point(bestSnapshotX.value(), bestSnapshotY.value()),
-                        goodMatch ? CV_RGB(0, 255, 0) : CV_RGB(255, 0, 0));
-            }
-#endif
-            std::cout << std::endl;
-
-
-            cv::imwrite("grid_image.png", gridImage);
+            // Update output image
+            cv::imwrite(outputImageName, gridImage);
         }
     }
 
