@@ -20,6 +20,7 @@ using namespace units::angle;
 using namespace units::math;
 
 //#define INFOMAX
+#define CONSTRAIN_HEADINGS
 
 //------------------------------------------------------------------------
 // Anonymous namespace
@@ -307,6 +308,9 @@ int main()
     std::vector<float> allDifferences;
 #else
     bool showBadMatches = false;
+#ifndef CONSTRAIN_HEADINGS
+    std::vector<std::vector<float>> allDifferences;
+#endif
 #endif
     for(const auto &g : grid) {
         const centimeter_t x = g.position[0];
@@ -328,19 +332,22 @@ int main()
             std::tie(bestHeading, lowestDifference, allDifferences) = pm.getHeading(snapshot);
             const double vectorLength = 1.0f;
 #else
+            size_t bestSnapshotIndex;
+#ifdef CONSTRAIN_HEADINGS
             // Get 'matrix' of differences from perfect memory
             const auto &allDifferences = pm.getImageDifferences(snapshot);
 
 
             // From these find the best snapshot within 90 degrees of route at nearest point
-            size_t bestSnapshotIndex;
-            //std::tie(bestHeading, bestSnapshotIndex, lowestDifference, allDifferences) = pm.getHeading(snapshot);
             std::tie(bestHeading, bestSnapshotIndex, lowestDifference) = getConstrainedHeading(allDifferences,
                                                                                                g.heading, std::get<3>(nearestPoint), 90_deg,
                                                                                                imSize);
 
             // Check resultant heading is actually within 90 degrees of route at nearest point
             assert(fabs(degree_t(atan2(sin(std::get<3>(nearestPoint) - bestHeading), cos(std::get<3>(nearestPoint) - bestHeading)))));
+#else
+            std::tie(bestHeading, bestSnapshotIndex, lowestDifference, allDifferences) = pm.getHeading(snapshot);
+#endif
             const double vectorLength = (1.0 - lowestDifference);
 #endif
 
