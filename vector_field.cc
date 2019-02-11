@@ -2,7 +2,6 @@
 #include <opencv2/opencv.hpp>
 
 // BoB robotics 3rd party includes
-#include "third_party/CLI11.hpp"
 #include "third_party/path.h"
 
 // BoB robotics includes
@@ -13,6 +12,9 @@
 
 // PSimpl includes
 #include "psimpl.h"
+
+// CLI11 includes
+#include "CLI11.hpp"
 
 using namespace BoBRobotics;
 using namespace units::literals;
