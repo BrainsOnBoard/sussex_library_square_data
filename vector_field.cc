@@ -26,6 +26,11 @@ using namespace units::math;
 //------------------------------------------------------------------------
 namespace
 {
+degree_t shortestAngleBetween(degree_t x, degree_t y)
+{
+    return atan2(sin(x - y), cos(x - y));
+}
+//------------------------------------------------------------------------
 void processRoute(const Navigation::ImageDatabase &database,
                   cv::Mat &renderMatFull, cv::Mat &renderMatDecimated,
                   std::vector<cv::Point2f> &decimatedPoints)
@@ -85,8 +90,8 @@ void processRoute(const Navigation::ImageDatabase &database,
 }
 //------------------------------------------------------------------------
 // Get distance to route from point
-std::tuple<centimeter_t, cv::Point2f, size_t> getNearestPointOnRoute(const cv::Point2f &point,
-                                                                     const std::vector<cv::Point2f> &routePoints)
+std::tuple<centimeter_t, cv::Point2f, size_t, degree_t> getNearestPointOnRoute(const cv::Point2f &point,
+                                                                               const std::vector<cv::Point2f> &routePoints)
 {
     // Loop through points
     float shortestDistanceSquared = std::numeric_limits<float>::max();
@@ -118,8 +123,12 @@ std::tuple<centimeter_t, cv::Point2f, size_t> getNearestPointOnRoute(const cv::P
         }
     }
 
+    // Get vector in direction of nearest segment and hence heading
+    const cv::Point2f nearestSegmentVector = routePoints[nearestSegment + 1] - routePoints[nearestSegment];
+    const degree_t nearestSegmentHeading = radian_t(std::atan2(nearestSegmentVector.y, nearestSegmentVector.x));
+
     // Return shortest distance and position of nearest point
-    return std::make_tuple(centimeter_t(std::sqrt(shortestDistanceSquared)), nearestPoint, nearestSegment);
+    return std::make_tuple(centimeter_t(std::sqrt(shortestDistanceSquared)), nearestPoint, nearestSegment, nearestSegmentHeading);
 }
 //------------------------------------------------------------------------
 template<typename FloatType>
@@ -170,6 +179,68 @@ Navigation::InfoMaxRotater<> createInfoMax(const cv::Size &imSize, const filesys
         std::cout << "Trained on " << route.size() << " snapshots" << std::endl;
         return std::move(infomax);
     }
+}
+//------------------------------------------------------------------------
+std::tuple<degree_t, size_t, float> getConstrainedHeading(const std::vector<std::vector<float>> &allDifferences,
+                                                          degree_t gridHeading, degree_t routeHeading, degree_t fov,
+                                                          const cv::Size &imSize)
+{
+    //std::cout << gridHeading << ", " << routeHeading << std::endl;
+    // Get angles on either side of route within which snapshots will be matched
+    const degree_t routeA = routeHeading - fov;
+    const degree_t routeB = routeHeading + fov;
+
+    // Get shortest angle between each of these route angles and grid
+    const degree_t gridRotationA = shortestAngleBetween(gridHeading, routeA);
+    const degree_t gridRotationB = shortestAngleBetween(gridHeading, routeB);
+
+    // Convert these into pixel rotations
+    int columnA = (int)std::round((turn_t(gridRotationA) * (double)imSize.width).value());
+    int columnB = (int)std::round((turn_t(gridRotationB) * (double)imSize.width).value());
+
+    // If either pixel rotation is negative (
+    if(columnA < 0) {
+        columnA += imSize.width;
+    }
+    if(columnB < 0) {
+        columnB += imSize.width;
+    }
+
+    // Get min and max
+    const int minColumn = std::min(columnA, columnB);
+    const int maxColumn = std::max(columnA, columnB);
+    assert(minColumn >= 0);
+    assert(maxColumn >= 0);
+    assert(minColumn < imSize.width);
+    assert(maxColumn < imSize.width);
+
+    //std::cout << minColumn << ", " << maxColumn << std::endl;
+
+    //assert(false);
+    // Loop through snapshots
+    float lowestDifference = std::numeric_limits<float>::max();
+    size_t bestSnapshot;
+    int bestColumn;
+    for(size_t i = 0; i < allDifferences.size(); i++) {
+        const auto &snapshotDifferences = allDifferences[i];
+
+        // Loop through acceptable range of columns
+        for(int c = minColumn; c < maxColumn; c++) {
+            if(snapshotDifferences[c] < lowestDifference) {
+                bestSnapshot = i;
+                bestColumn = c;
+                lowestDifference = snapshotDifferences[c];
+            }
+        }
+    }
+
+    // If column is > 180 deg, then subtract 360 deg
+    if (bestColumn > (imSize.width / 2)) {
+        bestColumn -= imSize.width;
+    }
+
+    // Scale difference to match code in ridf_processors.h:57
+    return std::make_tuple(turn_t((double)bestColumn / (double)imSize.width), bestSnapshot, lowestDifference / 255.0f);
 }
 }   // Anonymous namespace
 
@@ -225,8 +296,6 @@ int main()
     std::vector<float> allDifferences;
 #else
     bool showBadMatches = false;
-
-    std::vector<std::vector<float>> allDifferences;
 #endif
     for(const auto &g : grid) {
         const centimeter_t x = g.position[0];
@@ -246,25 +315,44 @@ int main()
             float lowestDifference;
 #ifdef INFOMAX
             std::tie(bestHeading, lowestDifference, allDifferences) = pm.getHeading(snapshot);
-            std::cout << "(" << x << ", " << y << ") : " << bestHeading << ", " << lowestDifference << std::endl;
             const double vectorLength = 1.0f;
 #else
+            // Get 'matrix' of differences from perfect memory
+            const auto &allDifferences = pm.getImageDifferences(snapshot);
+
+
+            // From these find the best snapshot within 90 degrees of route at nearest point
             size_t bestSnapshotIndex;
-            std::tie(bestHeading, bestSnapshotIndex, lowestDifference, allDifferences) = pm.getHeading(snapshot);
-            std::cout << "(" << x << ", " << y << ") : " << bestHeading << ", " << lowestDifference << ", " << bestSnapshotIndex;
+            //std::tie(bestHeading, bestSnapshotIndex, lowestDifference, allDifferences) = pm.getHeading(snapshot);
+            std::tie(bestHeading, bestSnapshotIndex, lowestDifference) = getConstrainedHeading(allDifferences,
+                                                                                               g.heading, std::get<3>(nearestPoint), 90_deg,
+                                                                                               imSize);
+
+            // Check resultant heading is actually within 90 degrees of route at nearest point
+            assert(fabs(degree_t(atan2(sin(std::get<3>(nearestPoint) - bestHeading), cos(std::get<3>(nearestPoint) - bestHeading)))));
             const double vectorLength = (1.0 - lowestDifference);
 #endif
 
+            // Add grid image heading to best heading as that is what it's relative to
+            bestHeading += g.heading;
+
             // Draw arrow showing vector field
-            const centimeter_t xEnd = x + (60_cm * vectorLength * sin(-bestHeading));
-            const centimeter_t yEnd = y + (60_cm * vectorLength * cos(-bestHeading));
+            const centimeter_t xEnd = x + (60_cm * vectorLength * cos(bestHeading));
+            const centimeter_t yEnd = y + (60_cm * vectorLength * sin(bestHeading));
             cv::arrowedLine(gridImage, cv::Point(x.value(), y.value()), cv::Point(xEnd.value(), yEnd.value()),
                             CV_RGB(0, 0, 255));
 
+            std::cout << "(" << x << ", " << y << ") : " << bestHeading << ", " << lowestDifference;
 #ifndef INFOMAX
+            std::cout << ", " << bestSnapshotIndex;
+
             // Get position of best snapshot
             const centimeter_t bestSnapshotX = route[bestSnapshotIndex].position[0];
             const centimeter_t bestSnapshotY = route[bestSnapshotIndex].position[1];
+
+            //cv::line(gridImage, cv::Point(x.value(), y.value()), std::get<1>(nearestPoint), CV_RGB(0, 255, 0));
+            cv::line(gridImage, cv::Point(x.value(), y.value()), cv::Point(bestSnapshotX.value(), bestSnapshotY.value()),
+                     goodMatch ? CV_RGB(0, 255, 0) : CV_RGB(255, 0, 0));
 
             // If snapshot is less than 3m away i.e. algorithm hasn't entirely failed draw line from snapshot to route
             const bool goodMatch = (sqrt(((bestSnapshotX - x) * (bestSnapshotX - x)) + ((bestSnapshotY - y) * (bestSnapshotY - y))) < 3_m);
@@ -274,7 +362,7 @@ int main()
             }
             
             if(goodMatch) {
-                std::cout << " (good)";
+                std::cout << " (good " <<  std::get<3>(nearestPoint) << ")";
             }
             std::cout << std::endl;
 #endif
