@@ -185,8 +185,10 @@ std::tuple<degree_t, size_t, float> getConstrainedHeading(const std::vector<std:
                                                           degree_t gridHeading, degree_t routeHeading, degree_t fov,
                                                           const cv::Size &imSize)
 {
-    //std::cout << gridHeading << ", " << routeHeading << std::endl;
-    // Get angles on either side of route within which snapshots will be matched
+    // **NOTE** this currently uses a super-naive approach because good solution is non-trivial as
+    // columns that represent the rotations are not necessarily contiguous - there is a dis-continuity in the middle
+
+    /*// Get angles on either side of route within which snapshots will be matched
     const degree_t routeA = routeHeading - fov;
     const degree_t routeB = routeHeading + fov;
 
@@ -212,35 +214,44 @@ std::tuple<degree_t, size_t, float> getConstrainedHeading(const std::vector<std:
     assert(minColumn >= 0);
     assert(maxColumn >= 0);
     assert(minColumn < imSize.width);
-    assert(maxColumn < imSize.width);
+    assert(maxColumn < imSize.width);*/
 
-    //std::cout << minColumn << ", " << maxColumn << std::endl;
-
-    //assert(false);
     // Loop through snapshots
     float lowestDifference = std::numeric_limits<float>::max();
-    size_t bestSnapshot;
-    int bestColumn;
+    size_t bestSnapshot = std::numeric_limits<size_t>::max();
+    degree_t bestRotation = 0_deg;
     for(size_t i = 0; i < allDifferences.size(); i++) {
         const auto &snapshotDifferences = allDifferences[i];
 
         // Loop through acceptable range of columns
-        for(int c = minColumn; c < maxColumn; c++) {
+        for(int c = 0; c < imSize.width; c++) {
+            // If this snapshot is a better match than current best
             if(snapshotDifferences[c] < lowestDifference) {
-                bestSnapshot = i;
-                bestColumn = c;
-                lowestDifference = snapshotDifferences[c];
+                // Convert column into pixel rotation
+                int pixelRotation = c;
+                if(pixelRotation > (imSize.width / 2)) {
+                    pixelRotation -= imSize.width;
+                }
+
+                // Convert this into angle
+                const degree_t rotation = turn_t((double)pixelRotation / (double)imSize.width);
+
+                // If the distance between this angle from grid and route angle is within FOV
+                if(fabs(shortestAngleBetween(rotation + gridHeading, routeHeading)) < fov) {
+                    // Update best
+                    bestSnapshot = i;
+                    bestRotation = rotation;
+                    lowestDifference = snapshotDifferences[c];
+                }
             }
         }
     }
 
-    // If column is > 180 deg, then subtract 360 deg
-    if (bestColumn > (imSize.width / 2)) {
-        bestColumn -= imSize.width;
-    }
+    // Check valid snapshot actually exists
+    assert(bestSnapshot != std::numeric_limits<size_t>::max());
 
     // Scale difference to match code in ridf_processors.h:57
-    return std::make_tuple(turn_t((double)bestColumn / (double)imSize.width), bestSnapshot, lowestDifference / 255.0f);
+    return std::make_tuple(bestRotation, bestSnapshot, lowestDifference / 255.0f);
 }
 }   // Anonymous namespace
 
@@ -288,7 +299,7 @@ int main()
                       CV_8UC3, cv::Scalar::all(0));
 
     // Draw route onto image
-    cv::polylines(gridImage, routePointsMat, false, CV_RGB(128, 128, 128));
+    cv::polylines(gridImage, routePointsMat, false, CV_RGB(64, 64, 64));
     cv::polylines(gridImage, decimatedRoutePointMat, false, CV_RGB(255, 255, 255));
 
     // Loop through grid entries
@@ -351,8 +362,6 @@ int main()
             const centimeter_t bestSnapshotY = route[bestSnapshotIndex].position[1];
 
             //cv::line(gridImage, cv::Point(x.value(), y.value()), std::get<1>(nearestPoint), CV_RGB(0, 255, 0));
-            cv::line(gridImage, cv::Point(x.value(), y.value()), cv::Point(bestSnapshotX.value(), bestSnapshotY.value()),
-                     goodMatch ? CV_RGB(0, 255, 0) : CV_RGB(255, 0, 0));
 
             // If snapshot is less than 3m away i.e. algorithm hasn't entirely failed draw line from snapshot to route
             const bool goodMatch = (sqrt(((bestSnapshotX - x) * (bestSnapshotX - x)) + ((bestSnapshotY - y) * (bestSnapshotY - y))) < 3_m);
