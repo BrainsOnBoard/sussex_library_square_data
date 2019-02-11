@@ -1,6 +1,7 @@
 WITH_EIGEN:=1
 include $(BOB_ROBOTICS_PATH)/make_common/bob_robotics.mk
 
+CXXFLAGS +=-DENABLE_PREDEFINED_SOLID_ANGLE_UNITS
 .PHONY: all clean
 
 all: vector_field

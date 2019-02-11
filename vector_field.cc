@@ -18,6 +18,7 @@ using namespace units::literals;
 using namespace units::length;
 using namespace units::angle;
 using namespace units::math;
+using namespace units::solid_angle;
 
 //#define INFOMAX
 #define CONSTRAIN_HEADINGS
@@ -312,6 +313,9 @@ int main()
     std::vector<std::vector<float>> allDifferences;
 #endif
 #endif
+
+    size_t numGridPointsWithinROI = 0;
+    degree_squared_t sumSquareError = 0_sq_deg;
     for(const auto &g : grid) {
         const centimeter_t x = g.position[0];
         const centimeter_t y = g.position[1];
@@ -321,6 +325,9 @@ int main()
 
         // If snapshot is within R.O.I.
         if(std::get<0>(nearestPoint) < 4_m) {
+            // Increment count
+            numGridPointsWithinROI++;
+
             // Load snapshot and resize
             cv::Mat snapshot = g.loadGreyscale();
             cv::resize(snapshot, snapshot, imSize);
@@ -354,13 +361,19 @@ int main()
             // Add grid image heading to best heading as that is what it's relative to
             bestHeading += g.heading;
 
+            // Get magnitude of shortest angle between route and headig
+            const degree_t angularError = shortestAngleBetween(bestHeading, std::get<3>(nearestPoint));
+
+            // Add to sum square error
+            sumSquareError += (angularError * angularError);
+
             // Draw arrow showing vector field
             const centimeter_t xEnd = x + (60_cm * vectorLength * cos(bestHeading));
             const centimeter_t yEnd = y + (60_cm * vectorLength * sin(bestHeading));
             cv::arrowedLine(gridImage, cv::Point(x.value(), y.value()), cv::Point(xEnd.value(), yEnd.value()),
                             CV_RGB(0, 0, 255));
 
-            std::cout << "(" << x << ", " << y << ") : " << bestHeading << ", " << lowestDifference;
+            std::cout << "(" << x << ", " << y << ") : " << bestHeading << "(" << angularError << "), " << lowestDifference;
 #ifndef INFOMAX
             std::cout << ", " << bestSnapshotIndex;
 
@@ -376,16 +389,15 @@ int main()
                 cv::line(gridImage, cv::Point(x.value(), y.value()), cv::Point(bestSnapshotX.value(), bestSnapshotY.value()),
                         goodMatch ? CV_RGB(0, 255, 0) : CV_RGB(255, 0, 0));
             }
-            
-            if(goodMatch) {
-                std::cout << " (good " <<  std::get<3>(nearestPoint) << ")";
-            }
-            std::cout << std::endl;
 #endif
+            std::cout << std::endl;
+
 
             cv::imwrite("grid_image.png", gridImage);
         }
     }
+
+    std::cout << "RMSE:" << degree_t(sqrt(sumSquareError / (double)numGridPointsWithinROI)) << std::endl;
 
 
     return EXIT_SUCCESS;
