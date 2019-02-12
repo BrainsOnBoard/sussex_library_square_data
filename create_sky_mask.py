@@ -24,7 +24,7 @@ if not path.exists(unwrapped_dir):
 # Build path to mask files, exit if it doesn't exist
 mask_dir = path.join(sys.argv[1], "mask")
 if not path.exists(mask_dir):
-    print("%s does not exist" % unwrapped_dir)
+    print("%s does not exist" % mask_dir)
     sys.exit(1)
 
 # Build path to skymask files, create if it doesn't exist
