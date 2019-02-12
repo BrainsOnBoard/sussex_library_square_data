@@ -336,7 +336,7 @@ public:
         setLowestDifference(lowestDifference / 255.0f);
 
         // Calculate vector length
-        setVectorLength(1.0f - lowestDifference);
+        setVectorLength(1.0f - getLowestDifference());
     }
 
 private:
