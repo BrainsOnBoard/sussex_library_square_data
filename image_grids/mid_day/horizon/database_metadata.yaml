@@ -1,0 +1,15 @@
+%YAML:1.0
+---
+metadata:
+   time: "2019-01-29 13:05:14"
+   type: grid
+   grid:
+      beginAtMM: [ 0., 0., 0. ]
+      separationMM: [ 1200., 1200., 0. ]
+      size: [ 13, 15, 1 ]
+   camera:
+      name: pixpro_usb
+      resolution: [ 720, 1 ]
+      isPanoramic: 1
+   needsUnwrapping: 0
+   isGreyscale: 1
