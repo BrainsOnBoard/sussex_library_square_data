@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Lists of memory types and variants to test
-MEMORY_TYPES=( PerfectMemory PerfectMemoryConstrained )
+MEMORY_TYPES=( PerfectMemory PerfectMemoryConstrained InfoMax InfoMaxConstrained )
 VARIANTS=( mask unwrapped skymask horizon )
 
 # Create directory to hold benchmark results

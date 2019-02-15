@@ -22,7 +22,7 @@ data = [d["RMSE"].values for _, d in bars]
 
 fig, axis = plt.subplots()
 axis.boxplot(data)
-axis.set_xticklabels(names)
+axis.set_xticklabels(names, rotation=90, horizontalalignment="right", verticalalignment="center_baseline")
 
 axis.set_ylabel("RMSE [degrees]")
 
