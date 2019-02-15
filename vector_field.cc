@@ -376,6 +376,13 @@ public:
         // **TODO** calculate vector length
         setVectorLength(1.0f);
     }
+
+protected:
+    //------------------------------------------------------------------------
+    // Protected API
+    //------------------------------------------------------------------------
+    const InfoMaxType &getInfoMax() const{ return m_InfoMax; }
+
 private:
     //------------------------------------------------------------------------
     // Static API
@@ -433,6 +440,60 @@ private:
     //------------------------------------------------------------------------
     InfoMaxType m_InfoMax;
 };
+
+//------------------------------------------------------------------------
+// InfoMaxConstrained
+//------------------------------------------------------------------------
+template<typename FloatType>
+class InfoMaxConstrained : public InfoMax<FloatType>
+{
+public:
+    InfoMaxConstrained(const cv::Size &imSize, const Navigation::ImageDatabase &route, degree_t fov)
+        : InfoMax<FloatType>(imSize, route), m_FOV(fov), m_ImageWidth(imSize.width)
+    {
+    }
+
+    virtual void test(const cv::Mat &snapshot, degree_t snapshotHeading, degree_t nearestRouteHeading) override
+    {
+        // Get vector of differences from InfoMax
+        const auto &allDifferences = this->getInfoMax().getImageDifferences(snapshot);
+
+        // Loop through snapshots
+        // **NOTE** this currently uses a super-naive approach as more efficient solution is non-trivial because
+        // columns that represent the rotations are not necessarily contiguous - there is a dis-continuity in the middle
+        this->setLowestDifference(std::numeric_limits<float>::max());
+        this->setBestHeading(0_deg);
+        for(size_t i = 0; i < allDifferences.size(); i++) {
+            // If this snapshot is a better match than current best
+            if(allDifferences[i] < this->getLowestDifference()) {
+                // Convert column into pixel rotation
+                int pixelRotation = i;
+                if(pixelRotation > (m_ImageWidth / 2)) {
+                    pixelRotation -= m_ImageWidth;
+                }
+
+                // Convert this into angle
+                const degree_t heading = snapshotHeading + turn_t((double)pixelRotation / (double)m_ImageWidth);
+
+                // If the distance between this angle from grid and route angle is within FOV, update best
+                if(fabs(shortestAngleBetween(heading, nearestRouteHeading)) < m_FOV) {
+                    this->setBestHeading(heading);
+                    this->setLowestDifference(allDifferences[i]);
+                }
+            }
+        }
+
+        // **TODO** calculate vector length
+        this->setVectorLength(1.0f);
+    }
+
+private:
+    //------------------------------------------------------------------------
+    // Members
+    //------------------------------------------------------------------------
+    const degree_t m_FOV;
+    const int m_ImageWidth;
+};
 }   // Anonymous namespace
 
 int main(int argc, char **argv)
@@ -464,7 +525,7 @@ int main(int argc, char **argv)
     app.add_option("--decimate-distance", decimateDistance, "Threshold (in cm) for decimating route points", true);
     app.add_option("--fov", fovDegrees,
                    "For 'constrained' memories, what angle (in degrees) on either side of route should snapshots be matched in", true);
-    app.add_set("--memory-type", memoryType, {"PerfectMemory", "PerfectMemoryConstrained", "InfoMax"},
+    app.add_set("--memory-type", memoryType, {"PerfectMemory", "PerfectMemoryConstrained", "InfoMax", "InfoMaxConstrained"},
                 "Type of memory to use for navigation", true);
     /*app.add_flag("--render-good-matches,--no-render-good-matches{false}", renderGoodMatches,
                  "Should lines be rendered between grid points and 'good' matches");
@@ -495,6 +556,9 @@ int main(int argc, char **argv)
     }
     else if(memoryType == "InfoMax") {
         memory.reset(new InfoMax<float>(imSize, route));
+    }
+    else if(memoryType == "InfoMaxConstrained") {
+        memory.reset(new InfoMaxConstrained<float>(imSize, route, degree_t(fovDegrees)));
     }
     else {
         throw std::runtime_error("Memory type '" + memoryType + "' not supported");
