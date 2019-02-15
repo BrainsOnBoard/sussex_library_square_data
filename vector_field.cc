@@ -353,7 +353,7 @@ private:
 template<typename FloatType>
 class InfoMax : public MemoryBase
 {
-    using InfoMaxType = Navigation::InfoMax<FloatType>;
+    using InfoMaxType = Navigation::InfoMaxRotater<Navigation::InSilicoRotater, FloatType>;
     using InfoMaxWeightMatrixType = Eigen::Matrix<FloatType, Eigen::Dynamic, Eigen::Dynamic>;
 
 public:
@@ -381,7 +381,7 @@ private:
     // Static API
     //------------------------------------------------------------------------
     // **TODO** move into BoB robotics
-    void writeWeights(const InfoMaxWeightMatrixType &weights, const filesystem::path &weightPath)
+    static void writeWeights(const InfoMaxWeightMatrixType &weights, const filesystem::path &weightPath)
     {
         // Write weights to disk
         std::ofstream netFile(weightPath.str(), std::ios::binary);
@@ -391,7 +391,7 @@ private:
     }
 
     // **TODO** move into BoB robotics
-    InfoMaxWeightMatrixType readWeights(const filesystem::path &weightPath)
+    static InfoMaxWeightMatrixType readWeights(const filesystem::path &weightPath)
     {
         // Open file
         std::ifstream is(weightPath.str(), std::ios::binary);
@@ -404,24 +404,23 @@ private:
         is.read(reinterpret_cast<char *>(&size), sizeof(size));
 
         // Create data array and fill it
-        Eigen::Matrix<FloatType, Eigen::Dynamic, Eigen::Dynamic> data(size[0], size[1]);
+        InfoMaxWeightMatrixType data(size[0], size[1]);
         is.read(reinterpret_cast<char *>(data.data()), sizeof(FloatType) * data.size());
 
         return std::move(data);
     }
 
-    static Navigation::InfoMaxRotater<FloatType> createInfoMax(const cv::Size &imSize, const Navigation::ImageDatabase &route)
+    static InfoMaxType createInfoMax(const cv::Size &imSize, const Navigation::ImageDatabase &route)
     {
         // Create path to weights from directory containing route
-        const filesystem::path weightPath = filesystem::path(route.getName()) / "infomax.bin";
-
+        const filesystem::path weightPath = filesystem::path(route.getPath()) / "infomax.bin";
         if(weightPath.exists()) {
             std::cout << "Loading weights from " << weightPath << std::endl;
-            Navigation::InfoMaxRotater<> infomax(imSize, readWeights(weightPath));
+            InfoMaxType infomax(imSize, readWeights(weightPath));
             return std::move(infomax);
         }
         else {
-            Navigation::InfoMaxRotater<> infomax(imSize);
+            InfoMaxType infomax(imSize);
             infomax.trainRoute(route, true);
             writeWeights(infomax.getWeights(), weightPath.str());
             std::cout << "Trained on " << route.size() << " snapshots" << std::endl;
@@ -432,7 +431,7 @@ private:
     //------------------------------------------------------------------------
     // Members
     //------------------------------------------------------------------------
-    Navigation::InfoMaxRotater<FloatType> m_InfoMax;
+    InfoMaxType m_InfoMax;
 };
 }   // Anonymous namespace
 
@@ -494,9 +493,9 @@ int main(int argc, char **argv)
         memory.reset(new PerfectMemoryConstrained(imSize, route, degree_t(fovDegrees),
                                                   renderGoodMatches, renderBadMatches));
     }
-    /*else if(memoryType == "InfoMax") {
+    else if(memoryType == "InfoMax") {
         memory.reset(new InfoMax<float>(imSize, route));
-    }*/
+    }
     else {
         throw std::runtime_error("Memory type '" + memoryType + "' not supported");
     }
