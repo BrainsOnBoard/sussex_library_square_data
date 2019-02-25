@@ -8,9 +8,9 @@ from rdp import rdp
 
 import plot_settings
 
-assert len(argv) >= 2
+# Check we only get a single argument
+assert len(argv) == 2
 
-rdp_epsilon = 15 if len(argv) == 2 else float(argv[2])
 
 # Read output
 output_data = np.loadtxt(argv[1], delimiter=",", skiprows=1, usecols=(0, 1, 2),
@@ -26,9 +26,15 @@ output_title = path.splitext(output_filename)[0]
 # Split output file title into pre-defined components
 _, route_name, memory, image_input = output_title.split("_")
 
+# Read decimate script
+decimate_filename = path.join("routes", route_name, "decimate.sh")
+with open(decimate_filename, "r") as decimate_file:
+    rdp_epsilon_string = decimate_file.read().replace("\n","")
+    rdp_epsilon = float(rdp_epsilon_string.split("=")[1])
+
 # Read CSV route
-route_data_path_filename = path.join("routes", route_name, image_input, "database_entries.csv")
-route_data = np.loadtxt(route_data_path_filename, delimiter=",", skiprows=1, usecols=(0, 1),
+route_data_filename = path.join("routes", route_name, image_input, "database_entries.csv")
+route_data = np.loadtxt(route_data_filename, delimiter=",", skiprows=1, usecols=(0, 1),
                         dtype={"names": ("x", "y"),
                                "formats": (np.float, np.float)})
 
