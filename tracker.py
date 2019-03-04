@@ -140,6 +140,7 @@ while True:
         update_trackers = not update_trackers
         if update_trackers:
             robot_tracker_index = None
+            trapezoid_tracker_indices = []
     
 
 #cv2.TrackerCSRT_create
