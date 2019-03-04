@@ -9,8 +9,8 @@ using namespace units::math;
 //------------------------------------------------------------------------
 // MemoryBase
 //------------------------------------------------------------------------
-MemoryBase::MemoryBase()
-:   m_BestHeading(0), m_LowestDifference(std::numeric_limits<size_t>::max()), m_VectorLength(0)
+MemoryBase::MemoryBase(const cv::Size &imSize)
+:   m_BestHeading(0), m_LowestDifference(std::numeric_limits<size_t>::max()), m_VectorLength(0), m_ImageSize(imSize)
 {
 }
 //------------------------------------------------------------------------
@@ -30,7 +30,7 @@ void MemoryBase::writeCSVLine(std::ostream &os, centimeter_t snapshotX, centimet
 //------------------------------------------------------------------------
 PerfectMemory::PerfectMemory(const cv::Size &imSize, const Navigation::ImageDatabase &route,
                              bool renderGoodMatches, bool renderBadMatches)
-:   m_PM(imSize), m_Route(route), m_BestSnapshotIndex(std::numeric_limits<size_t>::max()),
+:   MemoryBase(imSize), m_PM(imSize), m_Route(route), m_BestSnapshotIndex(std::numeric_limits<size_t>::max()),
     m_RenderGoodMatches(renderGoodMatches), m_RenderBadMatches(renderBadMatches)
 {
     m_PM.trainRoute(route, true);
@@ -50,6 +50,24 @@ void PerfectMemory::test(const cv::Mat &snapshot, degree_t snapshotHeading, degr
 
     // Calculate vector length
     setVectorLength(1.0f - lowestDifference);
+}
+//------------------------------------------------------------------------
+std::vector<float> PerfectMemory::calculateRIDF(const cv::Mat &snapshot) const
+{
+    // Get 'matrix' of differences from perfect memory
+    const auto &allDifferences = getPM().getImageDifferences(snapshot);
+
+    // Reserve vector to hold RIDF
+    std::vector<float> ridf(getImageSize().width, std::numeric_limits<float>::max());
+
+    // Loop through all snapshots
+    for(const auto &memDifferences : allDifferences) {
+        for(int c = 0; c < getImageSize().width; c++) {
+            ridf[c] = std::min(ridf[c], memDifferences[c]);
+        }
+    }
+
+    return ridf;
 }
 //------------------------------------------------------------------------
 void PerfectMemory::writeCSVHeader(std::ostream &os)
@@ -93,7 +111,7 @@ void PerfectMemory::render(cv::Mat &image, centimeter_t snapshotX, centimeter_t 
 //------------------------------------------------------------------------
 PerfectMemoryConstrained::PerfectMemoryConstrained(const cv::Size &imSize, const Navigation::ImageDatabase &route, degree_t fov,
                                                    bool renderGoodMatches, bool renderBadMatches)
-:   PerfectMemory(imSize, route, renderGoodMatches, renderBadMatches), m_FOV(fov), m_ImageWidth(imSize.width)
+:   PerfectMemory(imSize, route, renderGoodMatches, renderBadMatches), m_FOV(fov)
 {
 }
 //------------------------------------------------------------------------
@@ -111,18 +129,18 @@ void PerfectMemoryConstrained::test(const cv::Mat &snapshot, degree_t snapshotHe
     for(size_t i = 0; i < allDifferences.size(); i++) {
         const auto &snapshotDifferences = allDifferences[i];
 
-        // Loop through acceptable range of columns
-        for(int c = 0; c < m_ImageWidth; c++) {
+        // Loop through acceptable ram_ImageWidthnge of columns
+        for(int c = 0; c < getImageSize().width; c++) {
             // If this snapshot is a better match than current best
             if(snapshotDifferences[c] < lowestDifference) {
                 // Convert column into pixel rotation
                 int pixelRotation = c;
-                if(pixelRotation > (m_ImageWidth / 2)) {
-                    pixelRotation -= m_ImageWidth;
+                if(pixelRotation > (getImageSize().width / 2)) {
+                    pixelRotation -= getImageSize().width;
                 }
 
                 // Convert this into angle
-                const degree_t heading = snapshotHeading + turn_t((double)pixelRotation / (double)m_ImageWidth);
+                const degree_t heading = snapshotHeading + turn_t((double)pixelRotation / (double)getImageSize().width);
 
                 // If the distance between this angle from grid and route angle is within FOV, update best
                 if(fabs(shortestAngleBetween(heading, nearestRouteHeading)) < m_FOV) {
@@ -148,7 +166,7 @@ void PerfectMemoryConstrained::test(const cv::Mat &snapshot, degree_t snapshotHe
 // InfoMax
 //------------------------------------------------------------------------
 InfoMax::InfoMax(const cv::Size &imSize, const Navigation::ImageDatabase &route)
-    : m_InfoMax(createInfoMax(imSize, route))
+    : MemoryBase(imSize), m_InfoMax(createInfoMax(imSize, route))
 {
 }
 //------------------------------------------------------------------------
@@ -165,6 +183,11 @@ void InfoMax::test(const cv::Mat &snapshot, degree_t snapshotHeading, degree_t)
 
     // **TODO** calculate vector length
     setVectorLength(1.0f);
+}
+//------------------------------------------------------------------------
+std::vector<float> InfoMax::calculateRIDF(const cv::Mat &snapshot) const
+{
+    return getInfoMax().getImageDifferences(snapshot);
 }
 //------------------------------------------------------------------------
 void InfoMax::writeWeights(const InfoMax::InfoMaxWeightMatrixType &weights, const filesystem::path &weightPath)
@@ -219,40 +242,40 @@ InfoMax::InfoMaxType InfoMax::createInfoMax(const cv::Size &imSize, const Naviga
 // InfoMaxConstrained
 //------------------------------------------------------------------------
 InfoMaxConstrained::InfoMaxConstrained(const cv::Size &imSize, const Navigation::ImageDatabase &route, degree_t fov)
-    : InfoMax(imSize, route), m_FOV(fov), m_ImageWidth(imSize.width)
+:   InfoMax(imSize, route), m_FOV(fov)
 {
 }
 //------------------------------------------------------------------------
 void InfoMaxConstrained::test(const cv::Mat &snapshot, degree_t snapshotHeading, degree_t nearestRouteHeading)
 {
     // Get vector of differences from InfoMax
-    const auto &allDifferences = this->getInfoMax().getImageDifferences(snapshot);
+    const auto &allDifferences = getInfoMax().getImageDifferences(snapshot);
 
     // Loop through snapshots
     // **NOTE** this currently uses a super-naive approach as more efficient solution is non-trivial because
     // columns that represent the rotations are not necessarily contiguous - there is a dis-continuity in the middle
-    this->setLowestDifference(std::numeric_limits<float>::max());
-    this->setBestHeading(0_deg);
+    setLowestDifference(std::numeric_limits<float>::max());
+    setBestHeading(0_deg);
     for(size_t i = 0; i < allDifferences.size(); i++) {
         // If this snapshot is a better match than current best
-        if(allDifferences[i] < this->getLowestDifference()) {
+        if(allDifferences[i] < getLowestDifference()) {
             // Convert column into pixel rotation
             int pixelRotation = i;
-            if(pixelRotation > (m_ImageWidth / 2)) {
-                pixelRotation -= m_ImageWidth;
+            if(pixelRotation > (getImageSize().width / 2)) {
+                pixelRotation -= getImageSize().width;
             }
 
             // Convert this into angle
-            const degree_t heading = snapshotHeading + turn_t((double)pixelRotation / (double)m_ImageWidth);
+            const degree_t heading = snapshotHeading + turn_t((double)pixelRotation / (double)getImageSize().width);
 
             // If the distance between this angle from grid and route angle is within FOV, update best
             if(fabs(shortestAngleBetween(heading, nearestRouteHeading)) < m_FOV) {
-                this->setBestHeading(heading);
-                this->setLowestDifference(allDifferences[i]);
+                setBestHeading(heading);
+                setLowestDifference(allDifferences[i]);
             }
         }
     }
 
     // **TODO** calculate vector length
-    this->setVectorLength(1.0f);
+    setVectorLength(1.0f);
 }

@@ -20,12 +20,13 @@ inline units::angle::degree_t shortestAngleBetween(units::angle::degree_t x, uni
 class MemoryBase
 {
 public:
-    MemoryBase();
+    MemoryBase(const cv::Size &imSize);
 
     //------------------------------------------------------------------------
     // Declared virtuals
     //------------------------------------------------------------------------
     virtual void test(const cv::Mat &snapshot, units::angle::degree_t snapshotHeading, units::angle::degree_t nearestRouteHeading) = 0;
+    virtual std::vector<float> calculateRIDF(const cv::Mat &snapshot) const = 0;
     virtual void writeCSVHeader(std::ostream &os);
     virtual void writeCSVLine(std::ostream &os, units::length::centimeter_t snapshotX, units::length::centimeter_t snapshotY, units::angle::degree_t angularError);
     virtual void render(cv::Mat &, units::length::centimeter_t, units::length::centimeter_t)
@@ -47,13 +48,16 @@ protected:
     void setLowestDifference(float lowestDifference){ m_LowestDifference = lowestDifference; }
     void setVectorLength(float vectorLength){ m_VectorLength = vectorLength; }
 
+    const cv::Size &getImageSize() const{ return m_ImageSize; }
+
 private:
-    //-----------------------------------------------------------------------units-
+    //------------------------------------------------------------------------
     // Members
     //------------------------------------------------------------------------
     units::angle::degree_t m_BestHeading;
     float m_LowestDifference;
     float m_VectorLength;
+    const cv::Size m_ImageSize;
 };
 
 //------------------------------------------------------------------------
@@ -69,6 +73,7 @@ public:
     // MemoryBase virtuals
     //------------------------------------------------------------------------
     virtual void test(const cv::Mat &snapshot, units::angle::degree_t snapshotHeading, units::angle::degree_t) override;
+    virtual std::vector<float> calculateRIDF(const cv::Mat &snapshot) const override;
     virtual void writeCSVHeader(std::ostream &os);
     virtual void writeCSVLine(std::ostream &os, units::length::centimeter_t snapshotX, units::length::centimeter_t snapshotY, units::angle::degree_t angularError);
     virtual void render(cv::Mat &image, units::length::centimeter_t snapshotX, units::length::centimeter_t snapshotY);
@@ -95,6 +100,7 @@ private:
     size_t m_BestSnapshotIndex;
     const bool m_RenderGoodMatches;
     const bool m_RenderBadMatches;
+
 };
 
 //------------------------------------------------------------------------
@@ -114,7 +120,6 @@ private:
     // Members
     //------------------------------------------------------------------------
     const units::angle::degree_t m_FOV;
-    const int m_ImageWidth;
 };
 
 //------------------------------------------------------------------------
@@ -129,6 +134,7 @@ public:
     InfoMax(const cv::Size &imSize, const BoBRobotics::Navigation::ImageDatabase &route);
 
     virtual void test(const cv::Mat &snapshot, units::angle::degree_t snapshotHeading, units::angle::degree_t) override;
+    virtual std::vector<float> calculateRIDF(const cv::Mat &snapshot) const override;
 
 protected:
     //------------------------------------------------------------------------
@@ -167,5 +173,4 @@ private:
     // Members
     //------------------------------------------------------------------------
     const units::angle::degree_t m_FOV;
-    const int m_ImageWidth;
 };
