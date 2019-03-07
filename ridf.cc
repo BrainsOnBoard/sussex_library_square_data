@@ -79,7 +79,7 @@ int main(int argc, char **argv)
         outputCSVFile.open(outputCSVName);
     }
     std::ostream &outputCSV = outputCSVName.empty() ? std::cout : outputCSVFile;
-    outputCSV << "Rotation [degrees], familiarity" << std::endl;
+    outputCSV << "Rotation[pixels], Rotation [degrees], familiarity" << std::endl;
 
     // Load test image and resize
     cv::Mat testImage = cv::imread(testImagePath, cv::IMREAD_GRAYSCALE);
@@ -106,7 +106,7 @@ int main(int argc, char **argv)
 
         // Convert this into angle and write to output CSV
         const degree_t heading = turn_t((double)pixelRotation / (double)imSize.width);
-        outputCSV << heading << ", " << ridf[c] << std::endl;
+        outputCSV << c << ", " << heading << ", " << ridf[c] << std::endl;
 
         // If this isn't the last column
         if(c < (ridf.size() - 1)) {
