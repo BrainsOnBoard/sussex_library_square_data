@@ -216,7 +216,7 @@ InfoMax::InfoMaxWeightMatrixType InfoMax::readWeights(const filesystem::path &we
     InfoMaxWeightMatrixType data(size[0], size[1]);
     is.read(reinterpret_cast<char *>(data.data()), sizeof(float) * data.size());
 
-    return std::move(data);
+    return data;
 }
 //------------------------------------------------------------------------
 InfoMax::InfoMaxType InfoMax::createInfoMax(const cv::Size &imSize, const Navigation::ImageDatabase &route)
@@ -226,14 +226,14 @@ InfoMax::InfoMaxType InfoMax::createInfoMax(const cv::Size &imSize, const Naviga
     if(weightPath.exists()) {
         std::cout << "Loading weights from " << weightPath << std::endl;
         InfoMaxType infomax(imSize, readWeights(weightPath));
-        return std::move(infomax);
+        return infomax;
     }
     else {
         InfoMaxType infomax(imSize);
         infomax.trainRoute(route, true);
         writeWeights(infomax.getWeights(), weightPath.str());
         std::cout << "Trained on " << route.size() << " snapshots" << std::endl;
-        return std::move(infomax);
+        return infomax;
     }
 }
 
