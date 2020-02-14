@@ -1,1 +1,32 @@
+# Local programs
+ridf
+ridf_image.png
+vector_field
+grid_image.png
+
+# Python
 /__pycache__/
+
+# Visual Studio Code
+.vscode/**
+
+# OS-specific files
+**/.DS_Store
+
+# gcc/clang output files
+*.a
+*.o
+
+# CMake
+CMakeTmp
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles
+CMakeScripts
+Testing
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps
