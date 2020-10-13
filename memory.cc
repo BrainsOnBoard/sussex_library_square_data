@@ -61,9 +61,9 @@ std::vector<float> PerfectMemory::calculateRIDF(const cv::Mat &snapshot) const
     std::vector<float> ridf(getImageSize().width, std::numeric_limits<float>::max());
 
     // Loop through all snapshots
-    for(const auto &memDifferences : allDifferences) {
-        for(int c = 0; c < getImageSize().width; c++) {
-            ridf[c] = std::min(ridf[c], memDifferences[c]);
+    for (int i = 0; i < allDifferences.rows(); i++) {
+        for (int c = 0; c < allDifferences.cols(); c++) {
+            ridf[c] = std::min(ridf[c], allDifferences(i, c));
         }
     }
 
@@ -126,8 +126,8 @@ void PerfectMemoryConstrained::test(const cv::Mat &snapshot, degree_t snapshotHe
     float lowestDifference = std::numeric_limits<float>::max();
     setBestSnapshotIndex(std::numeric_limits<size_t>::max());
     setBestHeading(0_deg);
-    for(size_t i = 0; i < allDifferences.size(); i++) {
-        const auto &snapshotDifferences = allDifferences[i];
+    for(int i = 0; i < allDifferences.rows(); i++) {
+        const auto &snapshotDifferences = allDifferences.row(i);
 
         // Loop through acceptable ram_ImageWidthnge of columns
         for(int c = 0; c < getImageSize().width; c++) {
