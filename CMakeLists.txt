@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.1)
-include($ENV{BOB_ROBOTICS_PATH}/cmake/bob_robotics.cmake)
+include(get_submodule.cmake)
 
 # Default to building vector_field
 if(NOT TARGET)
