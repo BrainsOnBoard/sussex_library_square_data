@@ -257,7 +257,7 @@ int main(int argc, char **argv)
             numGridPointsWithinROI++;
 
             // Load snapshot and resize
-            cv::Mat snapshot = g.loadGreyscale();
+            cv::Mat snapshot = g.load();
             cv::resize(snapshot, snapshot, imSize);
 
             // Test snapshot using memory
